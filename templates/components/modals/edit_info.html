@@ -1,0 +1,20 @@
+<div id="edit-info-modal" class="fixed inset-0 bg-black/90 z-[60] hidden items-center justify-center p-5 backdrop-blur-sm">
+    <div class="bg-theme-card border-theme p-6 rounded-2xl w-full max-w-sm relative">
+        <div class="absolute top-2 right-2 cursor-pointer p-2" onclick="closeModal('edit-info-modal')">✕</div>
+        <h3 class="text-lg font-bold mb-4">Edit Info</h3>
+        <div class="flex gap-2 mb-2">
+            <div class="flex-1"><label class="text-[10px] uppercase opacity-50 block mb-1">First Name</label><input type="text" id="edit-fname" class="w-full bg-theme-input border-theme rounded-lg p-3 text-sm outline-none focus:border-[var(--mood)]"></div>
+            <div class="flex-1"><label class="text-[10px] uppercase opacity-50 block mb-1">Last Name</label><input type="text" id="edit-lname" class="w-full bg-theme-input border-theme rounded-lg p-3 text-sm outline-none focus:border-[var(--mood)]"></div>
+        </div>
+        <div class="mb-2"><label class="text-[10px] uppercase opacity-50 block mb-1">User ID</label><div id="edit-uid-display" class="w-full bg-white/5 border border-white/5 rounded-lg p-3 text-xs font-mono opacity-50">...</div></div>
+        <div class="mb-4"><label class="text-[10px] uppercase opacity-50 block mb-1">Favorite Color</label><input type="text" id="edit-color" class="w-full bg-theme-input border-theme rounded-lg p-3 text-sm outline-none focus:border-[var(--mood)]" placeholder="e.g. Neon Blue"></div>
+        <button onclick="askUpdateInfo()" class="w-full py-3 bg-[var(--mood)] text-black font-bold rounded-lg text-xs uppercase tracking-widest flex items-center justify-center">Update</button>
+    </div>
+</div>
+
+<div id="info-confirm-modal" class="fixed inset-0 bg-black/90 z-[80] hidden items-center justify-center p-5 backdrop-blur-sm">
+    <div class="bg-theme-card border-theme p-6 rounded-2xl w-full max-w-xs relative text-center">
+        <h3 class="text-lg font-bold mb-2">Confirm Changes?</h3><p class="text-sm opacity-60 mb-6">Are you sure you want to update your profile information?</p>
+        <div class="flex gap-3"><button onclick="closeModal('info-confirm-modal')" class="flex-1 py-3 bg-white/5 rounded-lg text-xs font-bold uppercase">Cancel</button><button id="btn-confirm-info" onclick="confirmUpdateInfo()" class="flex-1 py-3 bg-white text-black rounded-lg text-xs font-bold uppercase flex items-center justify-center">Confirm</button></div>
+    </div>
+</div>
