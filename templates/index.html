@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+    <link rel="manifest" href="/manifest.json">
+    <title>Celi: AI Journal</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/ranks.css">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/animations.css">
+    
+    <script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js'))}</script>
+</head>
+<body>
+
+    <canvas id="starfield"></canvas>
+    <div id="void-vignette"></div>
+    <div id="static-background"></div>
+
+    {% include 'components/header.html' %}
+
+    <div id="main-view">
+        {% include 'components/dashboard_card.html' %}
+        {% include 'components/calendar.html' %}
+        
+        {% include 'components/echo.html' %}
+    </div>
+
+    {% include 'components/galaxy_btn.html' %}
+    {% include 'components/dock.html' %}
+    {% include 'components/fabs.html' %}
+
+    {% include 'components/modals/chat.html' %}
+    {% include 'components/modals/rank_tree.html' %}
+    {% include 'components/modals/archive.html' %}
+    {% include 'components/modals/profile.html' %}
+    {% include 'components/modals/edit_info.html' %}
+    {% include 'components/modals/auth_actions.html' %}
+    {% include 'components/modals/status.html' %}
+    {% include 'components/modals/policy.html' %}
+
+    <script src="/static/js/core.js"></script>
+    <script src="/static/js/galaxy.js"></script>
+    <script src="/static/js/data.js"></script>
+    <script src="/static/js/ranks.js"></script>
+    <script src="/static/js/chat.js"></script>
+    
+    <script>
+        window.onload = async () => {
+            await loadData();
+            if (typeof triggerAiSignal === "function") triggerAiSignal();
+        };
+    </script>
+</body>
+</html>
