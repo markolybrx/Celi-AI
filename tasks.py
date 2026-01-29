@@ -164,3 +164,41 @@ def generate_weekly_insight(user_id):
 
     except Exception as e:
         print(f"⚠️ Insight Generation Failed: {e}")
+
+@celery_app.task
+def generate_daily_trivia_task(user_id):
+    """
+    Asks Gemini for a unique daily fact for the user.
+    Stores it with today's date so it doesn't regenerate until tomorrow.
+    """
+    try:
+        import random
+        topics = ["astronomy", "psychology", "nature", "ancient history", "quantum physics", "philosophy", "neuroscience"]
+        topic = random.choice(topics)
+        
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        prompt = f"""
+        Tell me a fascinating, lesser-known fact about {topic}. 
+        It should be short (minimum 20 words but not more than 40 words), awe-inspiring, and sound like something a smart friend would share.
+        Return ONLY the fact as plain text. No 'Here is a fact:' prefix.
+        """
+        
+        response = model.generate_content(prompt)
+        fact_text = response.text.strip()
+        
+        # Save to user profile with today's date
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        db.users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "daily_trivia": {
+                    "date": today_str,
+                    "fact": fact_text,
+                    "topic": topic
+                }
+            }}
+        )
+        print(f"✅ [Worker] Trivia generated for {user_id}")
+    except Exception as e:
+        print(f"⚠️ Trivia Generation Failed: {e}")
