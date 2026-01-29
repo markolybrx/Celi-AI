@@ -65,7 +65,7 @@ async function loadData() {
         
         userHistoryDates = Object.values(fullChatHistory).map(e=>e.date);
 
-        // --- 4. CELESTIAL INSIGHT LOGIC (REPLACED ECHO) ---
+        // --- 4. WEEKLY INSIGHT (REPLACES ECHO) ---
         const insightText = document.getElementById('insight-text');
         const insightRecBox = document.getElementById('insight-rec-box');
         const insightRecText = document.getElementById('insight-rec-text');
@@ -76,9 +76,8 @@ async function loadData() {
             const insight = data.weekly_insight;
 
             if (insight) {
-                // Populate Data
                 insightText.innerText = `"${insight.text}"`;
-                insightRecText.innerText = insight.recommendation;
+                if(insightRecText) insightRecText.innerText = insight.recommendation;
                 
                 // State B: Active
                 if (insight.status === 'active') {
@@ -102,7 +101,23 @@ async function loadData() {
             }
         }
 
-        // --- 5. RENDER CALENDAR ---
+        // --- 5. INFINITE TRIVIA LOGIC ---
+        const triviaText = document.getElementById('daily-trivia-text');
+        
+        if (triviaText && data.daily_trivia) {
+            triviaText.innerText = `"${data.daily_trivia.fact}"`;
+            
+            // Visual loading state check
+            if(data.daily_trivia.loading) {
+                triviaText.classList.add('animate-pulse');
+                triviaText.style.opacity = "0.7";
+            } else {
+                triviaText.classList.remove('animate-pulse');
+                triviaText.style.opacity = "1";
+            }
+        }
+
+        // --- 6. RENDER CALENDAR ---
         renderCalendar(); 
         
     } catch(e) { 
