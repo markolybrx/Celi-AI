@@ -5,70 +5,107 @@ let selectedMonthIdx = 0;
 
 async function loadData() { 
     try { 
-        const res = await fetch('/api/data'); if(!res.ok) return; 
+        const res = await fetch('/api/data'); 
+        if(!res.ok) return; 
+        
         const data = await res.json(); 
         if(data.status === 'guest') { window.location.href='/login'; return; } 
-        
-        // --- 1. LOAD DASHBOARD DATA ---
-        globalRankTree = data.progression_tree; currentLockIcon = data.progression_tree.lock_icon; 
-        const hour = new Date().getHours(); let timeGreet = hour >= 18 ? "Good Evening" : (hour >= 12 ? "Good Afternoon" : "Good Morning");
-        document.getElementById('greeting-text').innerText = `${timeGreet}, ${data.first_name}!`; 
-        document.getElementById('rank-display').innerText = data.rank; 
-        document.getElementById('rank-psyche').innerText = data.rank_psyche; 
-        document.getElementById('rank-progress-bar').style.width = `${data.rank_progress}%`; 
-        document.getElementById('stardust-cnt').innerText = `${data.stardust_current}/${data.stardust_max} Stardust`; 
-        
-        // --- 2. LOAD PROFILE DATA ---
-        document.getElementById('pfp-img').src = data.profile_pic || ''; 
-        document.documentElement.style.setProperty('--mood', data.current_color); 
-        document.getElementById('main-rank-icon').innerHTML = data.current_svg; 
-        document.getElementById('profile-pfp-large').src = data.profile_pic || ''; 
-        document.getElementById('profile-fullname').innerText = `${data.first_name} ${data.last_name}`; 
-        document.getElementById('profile-id').innerText = data.username; 
-        document.getElementById('profile-color-text').innerText = data.aura_color; 
-        
-        const dot = document.getElementById('profile-color-dot'); dot.style.backgroundColor = data.aura_color;
-        if (!data.aura_color || dot.style.backgroundColor === '') dot.style.backgroundColor = data.current_color;
 
-        document.getElementById('profile-secret-q').innerText = SQ_MAP[data.secret_question] || data.secret_question;
-        document.getElementById('edit-fname').value = data.first_name; 
-        document.getElementById('edit-lname').value = data.last_name; 
-        document.getElementById('edit-color').value = data.aura_color; 
-        document.getElementById('edit-uid-display').innerText = data.username;
-        document.getElementById('theme-btn').innerText = document.documentElement.getAttribute('data-theme') === 'light' ? 'Light' : 'Dark';
+        // --- 1. LOAD DASHBOARD DATA ---
+        // Safety Check: Ensure progression_tree exists before using it
+        if (data.progression_tree) {
+            globalRankTree = data.progression_tree; 
+            currentLockIcon = data.progression_tree.lock_icon || '';
+        }
+
+        const hour = new Date().getHours(); 
+        let timeGreet = hour >= 18 ? "Good Evening" : (hour >= 12 ? "Good Afternoon" : "Good Morning");
         
+        // Safe DOM Updates
+        const safeSet = (id, val) => { const el = document.getElementById(id); if(el) el.innerText = val; };
+        const safeSrc = (id, val) => { const el = document.getElementById(id); if(el) el.src = val || ''; };
+
+        safeSet('greeting-text', `${timeGreet}, ${data.first_name || 'Traveler'}!`); 
+        safeSet('rank-display', data.rank || 'Observer III'); 
+        safeSet('rank-psyche', data.rank_psyche || 'The Telescope'); 
+        safeSet('stardust-cnt', `${data.stardust_current || 0}/${data.stardust_max || 100} Stardust`); 
+        
+        const progressBar = document.getElementById('rank-progress-bar');
+        if(progressBar) progressBar.style.width = `${data.rank_progress || 0}%`; 
+
+        // --- 2. LOAD PROFILE DATA ---
+        safeSrc('pfp-img', data.profile_pic); 
+        safeSrc('profile-pfp-large', data.profile_pic); 
+        
+        document.documentElement.style.setProperty('--mood', data.current_color || '#00f2fe'); 
+        
+        const rankIcon = document.getElementById('main-rank-icon');
+        if(rankIcon && data.current_svg) rankIcon.innerHTML = data.current_svg; 
+
+        safeSet('profile-fullname', `${data.first_name} ${data.last_name}`); 
+        safeSet('profile-id', data.username); 
+        safeSet('profile-color-text', data.aura_color); 
+
+        const dot = document.getElementById('profile-color-dot'); 
+        if(dot) {
+            dot.style.backgroundColor = data.aura_color || data.current_color || '#00f2fe';
+        }
+
+        safeSet('profile-secret-q', SQ_MAP[data.secret_question] || data.secret_question);
+        
+        // Update Edit Inputs
+        const editFname = document.getElementById('edit-fname'); if(editFname) editFname.value = data.first_name || '';
+        const editLname = document.getElementById('edit-lname'); if(editLname) editLname.value = data.last_name || '';
+        const editColor = document.getElementById('edit-color'); if(editColor) editColor.value = data.aura_color || '#00f2fe';
+        safeSet('edit-uid-display', data.username);
+        
+        const themeBtn = document.getElementById('theme-btn');
+        if(themeBtn) themeBtn.innerText = document.documentElement.getAttribute('data-theme') === 'light' ? 'Light' : 'Dark';
+
         // --- 3. PREPARE HISTORY ---
         if(data.history) fullChatHistory = data.history; 
-        userHistoryDates = Object.values(data.history).map(e=>e.date);
+        else fullChatHistory = {};
         
-        // --- 4. HUMANIZED ECHO LOGIC (V12.16) ---
+        userHistoryDates = Object.values(fullChatHistory).map(e=>e.date);
+
+        // --- 4. HUMANIZED ECHO LOGIC (FIXED) ---
         const echoEl = document.getElementById('echo-text');
         if (echoEl) {
             const historyKeys = Object.keys(fullChatHistory).sort();
             if (historyKeys.length > 0) {
                 const lastKey = historyKeys[historyKeys.length - 1];
                 const lastEntry = fullChatHistory[lastKey];
-                
-                // Use backend generated natural summary directly
+
+                // FIX: Check for 'summary', then 'full_message', then 'user_msg'
                 let conversationText = lastEntry.summary;
-                
-                if (!conversationText) {
-                    const raw = lastEntry.user_msg || "something on your mind";
+
+                if (!conversationText || conversationText === "Processing...") {
+                    const raw = lastEntry.full_message || lastEntry.user_msg || "something on your mind";
                     const snippet = raw.length > 50 ? raw.substring(0, 50) + "..." : raw;
                     conversationText = `We talked about "${snippet}". Want to continue?`;
                 }
+
+                // FIX: Ensure it is a string before replacing
+                if (typeof conversationText === 'string') {
+                    conversationText = conversationText.replace(/\*\*/g, '').replace(/\*/g, '');
+                }
+
+                echoEl.innerText = conversationText;
                 
-                // Clean markdown if any
-                conversationText = conversationText.replace(/\*\*/g, '').replace(/\*/g, '');
-                
-                document.getElementById('echo-text').innerText = conversationText;
-                document.getElementById('echo-date').innerText = lastEntry.date;
+                const echoDate = document.getElementById('echo-date');
+                if(echoDate) echoDate.innerText = lastEntry.date;
+            } else {
+                echoEl.innerText = "The journal is empty. Write your first entry to begin.";
             }
         }
 
         // --- 5. RENDER CALENDAR ---
         renderCalendar(); 
-    } catch(e) { console.error("Data Load Error:", e); } 
+        
+    } catch(e) { 
+        console.error("CRITICAL DATA ERROR:", e); 
+        // Optional: Show a user-friendly error toast here
+    } 
 }
 
 // --- UTILITY FUNCTIONS ---
@@ -85,9 +122,9 @@ function renderCalendar() {
     g.innerHTML = ''; 
     const m = currentCalendarDate.getMonth(); 
     const y = currentCalendarDate.getFullYear(); 
-    
+
     document.getElementById('cal-month-year').innerText = new Date(y,m).toLocaleString('default',{month:'long', year:'numeric'}); 
-    
+
     const now = new Date();
     const isCurrent = (now.getMonth() === m && now.getFullYear() === y);
     const todayBtn = document.getElementById('cal-today-btn');
@@ -98,37 +135,40 @@ function renderCalendar() {
 
     // 1. Build a Map of Date -> Entry Data
     const dateMap = {};
-    Object.keys(fullChatHistory).forEach(id => {
-        const entry = fullChatHistory[id];
-        const dKey = entry.date;
-        
-        // Logic: If multiple entries on same day, prioritize 'rant' (Void) for indicator
-        if (!dateMap[dKey] || entry.mode === 'rant') {
-            dateMap[dKey] = { id: id, mode: entry.mode || 'journal' };
-        }
-    });
+    if (fullChatHistory) {
+        Object.keys(fullChatHistory).forEach(id => {
+            const entry = fullChatHistory[id];
+            if (entry && entry.date) { // Safety Check
+                const dKey = entry.date;
+                // Logic: If multiple entries on same day, prioritize 'rant' (Void) for indicator
+                if (!dateMap[dKey] || entry.mode === 'rant') {
+                    dateMap[dKey] = { id: id, mode: entry.mode || 'journal' };
+                }
+            }
+        });
+    }
 
     // Grid Headers
     ["S","M","T","W","T","F","S"].forEach(d => g.innerHTML += `<div>${d}</div>`); 
-    
+
     const days = new Date(y, m+1, 0).getDate(); 
     const f = new Date(y, m, 1).getDay(); 
-    
+
     for(let i=0; i<f; i++) g.innerHTML += `<div></div>`; 
-    
+
     for(let i=1; i<=days; i++) { 
         const d = document.createElement('div'); 
         d.className = 'cal-day'; 
         d.innerText = i; 
-        
+
         if (isCurrent && i === now.getDate()) d.classList.add('today');
-        
+
         const dateKey = `${y}-${String(m+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
-        
+
         // CHECK ENTRY & APPLY STYLE
         if (dateMap[dateKey]) {
             const entryData = dateMap[dateKey];
-            
+
             // Differentiate Void vs Journal
             if (entryData.mode === 'rant') {
                 d.classList.add('has-void');
@@ -142,7 +182,7 @@ function renderCalendar() {
                 openArchive(entryData.id);
             };
         }
-        
+
         g.appendChild(d); 
     } 
 }
@@ -157,16 +197,14 @@ function toggleDatePicker() {
     const picker = document.getElementById('cal-picker');
     if (!picker) return;
     const isActive = picker.classList.contains('active');
-    
+
     if (!isActive) {
-        // OPEN: Sync with current calendar
         pickerDate = new Date(currentCalendarDate.getTime());
         selectedMonthIdx = pickerDate.getMonth();
-        isYearMode = false; // Reset to Month view
+        isYearMode = false; 
         renderPickerUI();
         picker.classList.add('active');
     } else {
-        // CLOSE
         picker.classList.remove('active');
     }
 }
@@ -180,42 +218,38 @@ function renderPickerUI() {
     const yearText = document.getElementById('picker-year-text');
     const monthsContainer = document.getElementById('picker-months-container');
     const yearsContainer = document.getElementById('picker-years-container');
-    
+
     yearText.innerText = pickerDate.getFullYear();
 
     if (isYearMode) {
-        // SHOW YEAR GRID
         monthsContainer.classList.add('hidden');
         yearsContainer.classList.remove('hidden');
         yearsContainer.innerHTML = '';
-        
-        // Generate years range (e.g., current +/- 15 years)
+
         const currentYear = new Date().getFullYear();
         const startYear = currentYear - 15;
         const endYear = currentYear + 15;
-        
+
         for (let y = startYear; y <= endYear; y++) {
             const btn = document.createElement('div');
             btn.className = `picker-year-btn ${y === pickerDate.getFullYear() ? 'selected' : ''}`;
             btn.innerText = y;
             btn.onclick = () => {
                 pickerDate.setFullYear(y);
-                toggleYearMode(); // Go back to months
+                toggleYearMode(); 
             };
             yearsContainer.appendChild(btn);
         }
-        // Auto scroll to selected year
         setTimeout(() => {
             const selected = yearsContainer.querySelector('.selected');
             if(selected) selected.scrollIntoView({block: 'center'});
         }, 10);
 
     } else {
-        // SHOW MONTH GRID
         yearsContainer.classList.add('hidden');
         monthsContainer.classList.remove('hidden');
         monthsContainer.innerHTML = '';
-        
+
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         months.forEach((m, idx) => {
             const btn = document.createElement('div');
