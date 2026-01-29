@@ -13,7 +13,8 @@ import google.generativeai as genai
 
 # --- IMPORT DATABASE & TASKS ---
 import database as db
-from tasks import process_entry_analysis, generate_constellation_name_task
+# Added generate_weekly_insight to imports
+from tasks import process_entry_analysis, generate_constellation_name_task, generate_weekly_insight
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
 # --- SETUP LOGGING ---
@@ -179,7 +180,11 @@ def process():
             "embedding": None
         })
 
+        # Trigger Background Tasks
         process_entry_analysis.delay(timestamp, msg, session['user_id'])
+        
+        # Trigger Weekly Insight Update (New)
+        generate_weekly_insight.delay(session['user_id'])
 
         if reward_result.get('event') == 'constellation_complete':
             last_entries = db.history_col.find({"user_id": session['user_id']}, {'full_message': 1}).sort("timestamp", -1).limit(6)
@@ -239,7 +244,9 @@ def get_data():
         "stardust_max": max_dust,
         "history": loaded_history, 
         "profile_pic": user.get("profile_pic", ""),
-        "progression_tree": progression_tree
+        "progression_tree": progression_tree,
+        # Added Insight Data
+        "weekly_insight": user.get("weekly_insight", None)
     })
 
 @app.route('/api/galaxy_map')
@@ -377,7 +384,6 @@ def clear_history():
         return jsonify({"status": "success"})
     except: return jsonify({"status": "error"}), 500
 
-# --- STATIC FILES ---
 @app.route('/sw.js')
 def service_worker(): return send_from_directory('static', 'sw.js', mimetype='application/javascript')
 
