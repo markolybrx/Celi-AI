@@ -3,6 +3,7 @@ import logging
 import traceback
 import uuid
 import json
+import certifi
 from bson.objectid import ObjectId
 from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for, session, Response
 from flask_session import Session
@@ -24,11 +25,11 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'celi_super_secret_key_9
 app.config['SESSION_TYPE'] = 'redis'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_REDIS'] = db.redis_client # Use shared connection
+app.config['SESSION_REDIS'] = db.redis_client 
 
 server_session = Session(app)
 
-# --- CONFIG: AI CORE (For Immediate Chat Replies) ---
+# --- CONFIG: AI CORE ---
 api_key = os.environ.get("GEMINI_API_KEY")
 if api_key:
     clean_key = api_key.strip().replace("'", "").replace('"', "")
@@ -47,7 +48,7 @@ def serialize_doc(doc):
     if '_id' in doc: doc['_id'] = str(doc['_id'])
     if 'user_id' in doc and isinstance(doc['user_id'], ObjectId): doc['user_id'] = str(doc['user_id'])
     
-    # Recursively handle other ObjectIds (like file references)
+    # Recursively handle other ObjectIds
     for k, v in doc.items():
         if isinstance(v, ObjectId):
             doc[k] = str(v)
@@ -58,7 +59,6 @@ def serialize_doc(doc):
 # ==================================================
 
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
-    """Generates the immediate chat response."""
     candidates = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
     
     memory_block = ""
@@ -203,28 +203,21 @@ def process():
         traceback.print_exc()
         return jsonify({"reply": f"Signal Lost. Processing failed."}), 500
 
-# --- CRITICAL FIX: DATA SERIALIZATION ---
 @app.route('/api/data')
 def get_data():
     if 'user_id' not in session: return jsonify({"status": "guest"}), 401
     
-    # 1. Fetch User (and convert _id to string)
     user = db.users_col.find_one({"user_id": session['user_id']})
     if not user: return jsonify({"status": "error"}), 404
-    user = serialize_doc(user) # <--- THIS FIXES THE CRASH
+    user = serialize_doc(user) 
 
     rank_info = get_rank_meta(user.get('rank_index', 0))
     progression_tree = get_all_ranks_data()
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
-    # 2. Fetch History (and convert _ids to strings)
     history_cursor = db.history_col.find({"user_id": session['user_id']}, {'embedding': 0}).sort("timestamp", 1).limit(50)
-    
-    # Convert cursor to list, then serialize each document
     history_list = [serialize_doc(doc) for doc in history_cursor]
-    
-    # Convert back to dict for frontend compatibility
     loaded_history = {entry['timestamp']: entry for entry in history_list}
 
     return jsonify({
@@ -256,7 +249,7 @@ def galaxy_map():
                               {'_id': 0, 'full_message': 0, 'reply': 0, 'embedding': 0}).sort("timestamp", 1)
     stars = []
     for index, doc in enumerate(cursor):
-        doc = serialize_doc(doc) # Ensure safety
+        doc = serialize_doc(doc)
         stars.append({
             "id": doc['timestamp'], "date": doc['date'], 
             "summary": doc.get('summary', 'Processing...'), 
@@ -273,7 +266,7 @@ def star_detail():
     entry = db.history_col.find_one({"user_id": session['user_id'], "timestamp": timestamp}, {'embedding': 0})
     if not entry: return jsonify({"error": "Not found"})
     
-    entry = serialize_doc(entry) # Ensure safety
+    entry = serialize_doc(entry)
 
     analysis = entry.get('ai_analysis', "Psychological analysis is being generated...")
     image_url = f"/api/media/{entry['media_file_id']}" if entry.get('media_file_id') else None
@@ -288,7 +281,6 @@ def star_detail():
         "mode": entry.get('mode', 'journal')
     })
 
-# Add missing media route back
 @app.route('/api/media/<file_id>')
 def get_media(file_id):
     try:
@@ -297,23 +289,20 @@ def get_media(file_id):
         return Response(grid_out.read(), mimetype=grid_out.content_type)
     except: return "File not found", 404
 
-# Add missing update routes back (simplified)
 @app.route('/api/update_pfp', methods=['POST'])
 def update_pfp():
     if 'user_id' not in session: return jsonify({"status": "error"}), 401
     try:
         file = request.files['pfp']
-        file_id = db.fs.put(file.read(), filename=f"pfp_{session['user_id']}", content_type=file.mimetype)
-        pfp_url = f"/api/media/{file_id}"
-        db.users_col.update_one({"user_id": session['user_id']}, {"$set": {"profile_pic": pfp_url}})
-        return jsonify({"status": "success", "url": pfp_url})
+        if file:
+            file_id = db.fs.put(file.read(), filename=f"pfp_{session['user_id']}", content_type=file.mimetype)
+            pfp_url = f"/api/media/{file_id}"
+            db.users_col.update_one({"user_id": session['user_id']}, {"$set": {"profile_pic": pfp_url}})
+            return jsonify({"status": "success", "url": pfp_url})
+        return jsonify({"status": "error"})
     except: return jsonify({"status": "error"})
 
-if __name__ == '__main__': app.run(debug=True, port=5000)
-
-# ==================================================
-#           RESTORED ROUTES (PASTE ABOVE MAIN)
-# ==================================================
+# --- RESTORED ROUTES ---
 
 @app.route('/privacy_policy')
 def privacy_policy():
@@ -387,3 +376,12 @@ def clear_history():
         session.clear()
         return jsonify({"status": "success"})
     except: return jsonify({"status": "error"}), 500
+
+# --- STATIC FILES ---
+@app.route('/sw.js')
+def service_worker(): return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
+@app.route('/manifest.json')
+def manifest(): return send_from_directory('static', 'manifest.json', mimetype='application/json')
+
+if __name__ == '__main__': app.run(debug=True, port=5000)
