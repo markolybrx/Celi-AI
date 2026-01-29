@@ -12,7 +12,6 @@ async function loadData() {
         if(data.status === 'guest') { window.location.href='/login'; return; } 
 
         // --- 1. LOAD DASHBOARD DATA ---
-        // Safety Check: Ensure progression_tree exists before using it
         if (data.progression_tree) {
             globalRankTree = data.progression_tree; 
             currentLockIcon = data.progression_tree.lock_icon || '';
@@ -21,7 +20,6 @@ async function loadData() {
         const hour = new Date().getHours(); 
         let timeGreet = hour >= 18 ? "Good Evening" : (hour >= 12 ? "Good Afternoon" : "Good Morning");
         
-        // Safe DOM Updates
         const safeSet = (id, val) => { const el = document.getElementById(id); if(el) el.innerText = val; };
         const safeSrc = (id, val) => { const el = document.getElementById(id); if(el) el.src = val || ''; };
 
@@ -53,7 +51,6 @@ async function loadData() {
 
         safeSet('profile-secret-q', SQ_MAP[data.secret_question] || data.secret_question);
         
-        // Update Edit Inputs
         const editFname = document.getElementById('edit-fname'); if(editFname) editFname.value = data.first_name || '';
         const editLname = document.getElementById('edit-lname'); if(editLname) editLname.value = data.last_name || '';
         const editColor = document.getElementById('edit-color'); if(editColor) editColor.value = data.aura_color || '#00f2fe';
@@ -68,34 +65,40 @@ async function loadData() {
         
         userHistoryDates = Object.values(fullChatHistory).map(e=>e.date);
 
-        // --- 4. HUMANIZED ECHO LOGIC (FIXED) ---
-        const echoEl = document.getElementById('echo-text');
-        if (echoEl) {
-            const historyKeys = Object.keys(fullChatHistory).sort();
-            if (historyKeys.length > 0) {
-                const lastKey = historyKeys[historyKeys.length - 1];
-                const lastEntry = fullChatHistory[lastKey];
+        // --- 4. CELESTIAL INSIGHT LOGIC (REPLACED ECHO) ---
+        const insightText = document.getElementById('insight-text');
+        const insightRecBox = document.getElementById('insight-rec-box');
+        const insightRecText = document.getElementById('insight-rec-text');
+        const insightAction = document.getElementById('insight-action');
+        const insightStatus = document.getElementById('insight-status');
 
-                // FIX: Check for 'summary', then 'full_message', then 'user_msg'
-                let conversationText = lastEntry.summary;
+        if (insightText) {
+            const insight = data.weekly_insight;
 
-                if (!conversationText || conversationText === "Processing...") {
-                    const raw = lastEntry.full_message || lastEntry.user_msg || "something on your mind";
-                    const snippet = raw.length > 50 ? raw.substring(0, 50) + "..." : raw;
-                    conversationText = `We talked about "${snippet}". Want to continue?`;
-                }
-
-                // FIX: Ensure it is a string before replacing
-                if (typeof conversationText === 'string') {
-                    conversationText = conversationText.replace(/\*\*/g, '').replace(/\*/g, '');
-                }
-
-                echoEl.innerText = conversationText;
+            if (insight) {
+                // Populate Data
+                insightText.innerText = `"${insight.text}"`;
+                insightRecText.innerText = insight.recommendation;
                 
-                const echoDate = document.getElementById('echo-date');
-                if(echoDate) echoDate.innerText = lastEntry.date;
+                // State B: Active
+                if (insight.status === 'active') {
+                    if(insightRecBox) insightRecBox.classList.remove('hidden');
+                    if(insightAction) insightAction.classList.add('hidden');
+                    if(insightStatus) {
+                        insightStatus.innerText = "Weekly Pattern";
+                        insightStatus.className = "text-xs text-indigo-300 bg-indigo-900/30 px-2 py-1 rounded-md";
+                    }
+                } 
+                // State A: Empty/Persuasion
+                else {
+                    if(insightRecBox) insightRecBox.classList.add('hidden');
+                    if(insightAction) insightAction.classList.remove('hidden');
+                    if(insightStatus) insightStatus.innerText = "Awaiting Data";
+                }
             } else {
-                echoEl.innerText = "The journal is empty. Write your first entry to begin.";
+                // Fallback (Very first login)
+                insightText.innerText = `"I am calibrated and ready. Your journey begins with a single word."`;
+                if(insightRecBox) insightRecBox.classList.add('hidden');
             }
         }
 
@@ -104,7 +107,6 @@ async function loadData() {
         
     } catch(e) { 
         console.error("CRITICAL DATA ERROR:", e); 
-        // Optional: Show a user-friendly error toast here
     } 
 }
 
@@ -115,7 +117,7 @@ async function confirmUpdateInfo() { const btn = document.getElementById('btn-co
 async function updateSecurity(type) { let body = {}; const btn = type === 'pass' ? document.getElementById('btn-update-pass') : document.getElementById('btn-update-secret'); const originalText = "Update"; btn.innerHTML = '<span class="spinner"></span> Loading...'; btn.disabled = true; if(type === 'pass') { const p1 = document.getElementById('new-pass-input').value; const p2 = document.getElementById('confirm-pass-input').value; if(p1 !== p2) { document.getElementById('new-pass-input').classList.add('input-error'); document.getElementById('confirm-pass-input').classList.add('input-error'); setTimeout(()=>{ document.getElementById('new-pass-input').classList.remove('input-error'); document.getElementById('confirm-pass-input').classList.remove('input-error'); }, 500); btn.innerHTML=originalText; btn.disabled=false; return; } body = { new_password: p1 }; } else { const q = document.getElementById('new-secret-q').value; if(!q) { showStatus(false, "Select a Question"); btn.innerHTML=originalText; btn.disabled=false; return; } body = { new_secret_q: q, new_secret_a: document.getElementById('new-secret-a').value }; } try { const res = await fetch('/api/update_security', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }); const data = await res.json(); if(data.status === 'success') { closeModal('change-pass-modal'); closeModal('change-secret-modal'); showStatus(true, "Security details updated."); loadData(); } else { showStatus(false, data.message); } } catch(e) { showStatus(false, "Connection Failed"); } btn.innerHTML = originalText; btn.disabled = false; }
 async function performWipe() { const btn = document.querySelector('#delete-confirm-modal button.bg-red-500'); const originalText = btn.innerText; btn.innerText = "Deleting..."; btn.disabled = true; try { const res = await fetch('/api/clear_history', { method: 'POST' }); const data = await res.json(); if (data.status === 'success') { window.location.href = '/login'; } else { alert("Error: " + data.message); btn.innerText = originalText; btn.disabled = false; } } catch (e) { alert("Connection failed."); btn.innerText = originalText; btn.disabled = false; } }
 
-// --- CALENDAR RENDERER (V12.12: VOID & CLICK FIX) ---
+// --- CALENDAR RENDERER ---
 function renderCalendar() { 
     const g = document.getElementById('cal-grid'); 
     if (!g) return; 
@@ -133,14 +135,12 @@ function renderCalendar() {
         else todayBtn.classList.add('hidden');
     }
 
-    // 1. Build a Map of Date -> Entry Data
     const dateMap = {};
     if (fullChatHistory) {
         Object.keys(fullChatHistory).forEach(id => {
             const entry = fullChatHistory[id];
-            if (entry && entry.date) { // Safety Check
+            if (entry && entry.date) { 
                 const dKey = entry.date;
-                // Logic: If multiple entries on same day, prioritize 'rant' (Void) for indicator
                 if (!dateMap[dKey] || entry.mode === 'rant') {
                     dateMap[dKey] = { id: id, mode: entry.mode || 'journal' };
                 }
@@ -148,7 +148,6 @@ function renderCalendar() {
         });
     }
 
-    // Grid Headers
     ["S","M","T","W","T","F","S"].forEach(d => g.innerHTML += `<div>${d}</div>`); 
 
     const days = new Date(y, m+1, 0).getDate(); 
@@ -165,24 +164,18 @@ function renderCalendar() {
 
         const dateKey = `${y}-${String(m+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
 
-        // CHECK ENTRY & APPLY STYLE
         if (dateMap[dateKey]) {
             const entryData = dateMap[dateKey];
-
-            // Differentiate Void vs Journal
             if (entryData.mode === 'rant') {
                 d.classList.add('has-void');
             } else {
                 d.classList.add('has-entry');
             }
-
-            // Click Handler
             d.onclick = (e) => {
-                e.stopPropagation(); // Prevent bubbling issues
+                e.stopPropagation(); 
                 openArchive(entryData.id);
             };
         }
-
         g.appendChild(d); 
     } 
 }
