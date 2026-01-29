@@ -310,3 +310,80 @@ def update_pfp():
     except: return jsonify({"status": "error"})
 
 if __name__ == '__main__': app.run(debug=True, port=5000)
+
+# ==================================================
+#           RESTORED ROUTES (PASTE ABOVE MAIN)
+# ==================================================
+
+@app.route('/privacy_policy')
+def privacy_policy():
+    return render_template('privacy_policy.html')
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    try:
+        data = request.json
+        if db.users_col.find_one({"username": data['reg_username']}): 
+            return jsonify({"status": "error", "error": "Username taken"})
+        
+        new_user = {
+            "user_id": str(uuid.uuid4()), 
+            "username": data['reg_username'], 
+            "password_hash": generate_password_hash(data['reg_password']),
+            "first_name": data['fname'], 
+            "last_name": data['lname'], 
+            "dob": data['dob'], 
+            "aura_color": data.get('fav_color', '#00f2fe'),
+            "secret_question": data['secret_question'], 
+            "secret_answer_hash": generate_password_hash(data['secret_answer'].lower().strip()),
+            "rank": "Observer III", "rank_index": 0, "stardust": 0, 
+            "profile_pic": data.get('profile_pic', ''), 
+            "joined_at": datetime.now()
+        }
+        db.users_col.insert_one(new_user)
+        return jsonify({"status": "success"})
+    except Exception as e: return jsonify({"status": "error", "error": str(e)})
+
+@app.route('/api/update_profile', methods=['POST'])
+def update_profile():
+    if 'user_id' not in session: return jsonify({"status": "error", "message": "Auth required"}), 401
+    try:
+        data = request.json
+        updates = {}
+        if 'first_name' in data: updates['first_name'] = data['first_name']
+        if 'last_name' in data: updates['last_name'] = data['last_name']
+        if 'aura_color' in data: updates['aura_color'] = data['aura_color']
+        
+        if updates:
+            db.users_col.update_one({"user_id": session['user_id']}, {"$set": updates})
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error", "message": "No changes"})
+    except Exception as e: return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/update_security', methods=['POST'])
+def update_security():
+    if 'user_id' not in session: return jsonify({"status": "error", "message": "Auth required"}), 401
+    try:
+        data = request.json
+        updates = {}
+        if 'new_password' in data: 
+            updates['password_hash'] = generate_password_hash(data['new_password'])
+        if 'new_secret_a' in data:
+            updates['secret_question'] = data['new_secret_q']
+            updates['secret_answer_hash'] = generate_password_hash(data['new_secret_a'].lower().strip())
+            
+        if updates:
+            db.users_col.update_one({"user_id": session['user_id']}, {"$set": updates})
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error"})
+    except Exception as e: return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/clear_history', methods=['POST'])
+def clear_history():
+    if 'user_id' not in session: return jsonify({"status": "error"}), 401
+    try:
+        db.history_col.delete_many({"user_id": session['user_id']})
+        db.users_col.delete_one({"user_id": session['user_id']})
+        session.clear()
+        return jsonify({"status": "success"})
+    except: return jsonify({"status": "error"}), 500
