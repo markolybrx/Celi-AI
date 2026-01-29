@@ -35,10 +35,27 @@ if api_key:
     genai.configure(api_key=clean_key)
 
 # ==================================================
+#           HELPER: JSON SERIALIZER
+# ==================================================
+def serialize_doc(doc):
+    """Converts MongoDB documents to JSON-safe dictionaries."""
+    if not doc: return None
+    if isinstance(doc, list):
+        return [serialize_doc(d) for d in doc]
+    
+    # Convert ObjectId to string
+    if '_id' in doc: doc['_id'] = str(doc['_id'])
+    if 'user_id' in doc and isinstance(doc['user_id'], ObjectId): doc['user_id'] = str(doc['user_id'])
+    
+    # Recursively handle other ObjectIds (like file references)
+    for k, v in doc.items():
+        if isinstance(v, ObjectId):
+            doc[k] = str(v)
+    return doc
+
+# ==================================================
 #           SYNC HELPER (Immediate Reply)
 # ==================================================
-# We keep this SYNC because we want the user to get a reply instantly.
-# Everything else (Summary, Analysis, Embeddings) moves to Celery.
 
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
     """Generates the immediate chat response."""
@@ -67,14 +84,8 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
     return "Signal Lost. I heard you, but I cannot speak right now."
 
 def find_similar_memories_sync(user_id, query_text):
-    """
-    Lightweight sync vector search. 
-    If this is too slow, we can remove it, but it usually takes <1s.
-    """
     if not query_text or db.history_col is None: return []
     try:
-        # We need an embedding for the query. 
-        # Since this is blocking, we use the fastest model or skip if needed.
         result = genai.embed_content(model="models/text-embedding-004", content=query_text)
         query_vector = result['embedding']
         
@@ -125,24 +136,19 @@ def process():
         audio_file = request.files.get('audio')
         timestamp = str(datetime.now().timestamp())
 
-        # 1. Handle Media (Sync - Fast)
         media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype) if image_file else None
         audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype) if audio_file else None
         
         image_bytes = None
         if media_id:
             image_bytes = db.fs.get(media_id).read()
-            image_mime = image_file.mimetype
 
-        # 2. Context Retrieval (Sync - Optional, can disable if slow)
         past_memories = []
         if msg and len(msg) > 10:
             past_memories = find_similar_memories_sync(session['user_id'], msg)
 
-        # 3. Calculate Rewards (Sync - Very Fast)
         reward_result = process_daily_rewards(db.users_col, session['user_id'], msg)
 
-        # 4. Generate Immediate Reply (Sync - 1-2s)
         reply = "..."
         if mode == 'rant':
             reply = generate_immediate_reply(msg, image_bytes, image_file.mimetype if image_file else None, True, past_memories)
@@ -157,16 +163,14 @@ def process():
                 reply = generate_immediate_reply(msg, image_bytes, image_file.mimetype if image_file else None, False, past_memories)
                 if "open The Void" in reply: session['awaiting_void_confirm'] = True
 
-        # 5. Save Initial Record (Sync)
-        # We save "Processing..." for summary/analysis so the UI has something to show immediately
         db.history_col.insert_one({
             "user_id": session['user_id'],
             "timestamp": timestamp,
             "date": datetime.now().strftime("%Y-%m-%d"),
-            "summary": "Processing...",  # Placeholder
+            "summary": "Processing...",  
             "full_message": msg,
             "reply": reply,
-            "ai_analysis": None,         # Placeholder
+            "ai_analysis": None,         
             "mode": mode,
             "has_media": bool(media_id), "media_file_id": media_id,
             "has_audio": bool(audio_id), "audio_file_id": audio_id,
@@ -175,17 +179,13 @@ def process():
             "embedding": None
         })
 
-        # 6. TRIGGER BACKGROUND TASKS (Async - Instant)
-        # This offloads the heavy lifting (Embedding, Summary, Analysis)
         process_entry_analysis.delay(timestamp, msg, session['user_id'])
 
-        # Check for Constellation Event
         if reward_result.get('event') == 'constellation_complete':
             last_entries = db.history_col.find({"user_id": session['user_id']}, {'full_message': 1}).sort("timestamp", -1).limit(6)
             text_block = msg + " " + " ".join([e.get('full_message','') for e in last_entries])
             generate_constellation_name_task.delay(session['user_id'], timestamp, text_block)
 
-        # 7. Construct Response
         command = None
         level_check = update_rank_check(db.users_col, session['user_id'])
         
@@ -203,24 +203,38 @@ def process():
         traceback.print_exc()
         return jsonify({"reply": f"Signal Lost. Processing failed."}), 500
 
-# --- DATA ENDPOINTS ---
+# --- CRITICAL FIX: DATA SERIALIZATION ---
 @app.route('/api/data')
 def get_data():
     if 'user_id' not in session: return jsonify({"status": "guest"}), 401
+    
+    # 1. Fetch User (and convert _id to string)
     user = db.users_col.find_one({"user_id": session['user_id']})
     if not user: return jsonify({"status": "error"}), 404
+    user = serialize_doc(user) # <--- THIS FIXES THE CRASH
 
     rank_info = get_rank_meta(user.get('rank_index', 0))
     progression_tree = get_all_ranks_data()
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
-    history_cursor = db.history_col.find({"user_id": session['user_id']}, {'_id': 0, 'embedding': 0}).sort("timestamp", 1).limit(50)
-    loaded_history = {entry['timestamp']: entry for entry in history_cursor}
+    # 2. Fetch History (and convert _ids to strings)
+    history_cursor = db.history_col.find({"user_id": session['user_id']}, {'embedding': 0}).sort("timestamp", 1).limit(50)
+    
+    # Convert cursor to list, then serialize each document
+    history_list = [serialize_doc(doc) for doc in history_cursor]
+    
+    # Convert back to dict for frontend compatibility
+    loaded_history = {entry['timestamp']: entry for entry in history_list}
 
     return jsonify({
         "status": "user", 
         "username": user.get("username"), 
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name", ""),
+        "user_id": user.get("user_id", ""),
+        "aura_color": user.get("aura_color", "#00f2fe"),
+        "secret_question": user.get("secret_question", "???"),
         "rank": user.get("rank", "Observer III"), 
         "rank_index": user.get("rank_index", 0),
         "rank_progress": (current_dust/max_dust)*100 if max_dust>0 else 0,
@@ -242,9 +256,10 @@ def galaxy_map():
                               {'_id': 0, 'full_message': 0, 'reply': 0, 'embedding': 0}).sort("timestamp", 1)
     stars = []
     for index, doc in enumerate(cursor):
+        doc = serialize_doc(doc) # Ensure safety
         stars.append({
             "id": doc['timestamp'], "date": doc['date'], 
-            "summary": doc.get('summary', 'Processing...'), # Handling async lag
+            "summary": doc.get('summary', 'Processing...'), 
             "type": "void" if doc.get('mode') == 'rant' else "journal",
             "has_media": doc.get('has_media', False),
             "group": index // 7, "constellation_name": doc.get('constellation_name', None), "index": index
@@ -255,12 +270,12 @@ def galaxy_map():
 def star_detail():
     if 'user_id' not in session: return jsonify({"error": "Auth"})
     timestamp = request.json.get('id')
-    entry = db.history_col.find_one({"user_id": session['user_id'], "timestamp": timestamp}, {'_id': 0, 'embedding': 0})
+    entry = db.history_col.find_one({"user_id": session['user_id'], "timestamp": timestamp}, {'embedding': 0})
     if not entry: return jsonify({"error": "Not found"})
-
-    # If analysis is still missing (very rare), we say "Processing"
-    analysis = entry.get('ai_analysis', "Psychological analysis is being generated...")
     
+    entry = serialize_doc(entry) # Ensure safety
+
+    analysis = entry.get('ai_analysis', "Psychological analysis is being generated...")
     image_url = f"/api/media/{entry['media_file_id']}" if entry.get('media_file_id') else None
     audio_url = f"/api/media/{entry['audio_file_id']}" if entry.get('audio_file_id') else None
 
@@ -273,6 +288,25 @@ def star_detail():
         "mode": entry.get('mode', 'journal')
     })
 
-# Add other helper routes (media, pfp, etc.) back here as needed using db.fs and db.users_col
+# Add missing media route back
+@app.route('/api/media/<file_id>')
+def get_media(file_id):
+    try:
+        if db.fs is None: return "Database Error", 500
+        grid_out = db.fs.get(ObjectId(file_id))
+        return Response(grid_out.read(), mimetype=grid_out.content_type)
+    except: return "File not found", 404
+
+# Add missing update routes back (simplified)
+@app.route('/api/update_pfp', methods=['POST'])
+def update_pfp():
+    if 'user_id' not in session: return jsonify({"status": "error"}), 401
+    try:
+        file = request.files['pfp']
+        file_id = db.fs.put(file.read(), filename=f"pfp_{session['user_id']}", content_type=file.mimetype)
+        pfp_url = f"/api/media/{file_id}"
+        db.users_col.update_one({"user_id": session['user_id']}, {"$set": {"profile_pic": pfp_url}})
+        return jsonify({"status": "success", "url": pfp_url})
+    except: return jsonify({"status": "error"})
 
 if __name__ == '__main__': app.run(debug=True, port=5000)
