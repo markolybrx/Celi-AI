@@ -1,17 +1,11 @@
-# Celi: Sovereign Mirror & Advisor
+# Celi-AI
 
-Celi is a high-level AI journal and strategic advisor built with Flask and the Groq Llama 3.1 API. She uses a "Mirror Protocol" to provide brutally honest feedback and identify behavioral patterns.
+This project utilizes Google Generative AI (Gemini) for various functionalities. Please ensure that you set your API key correctly.
 
-## 🚀 Deployment (Render.com)
-1. Link this repository to Render.
-2. Set `Start Command` to: `gunicorn app:app`
-3. Add `GROQ_API_KEY` to Environment Variables.
+## Setting Up
 
-## 🛠 Tech Stack
-- **Backend:** Python (Flask)
-- **AI:** Groq (Llama-3.1-70b-versatile)
-- **Frontend:** HTML5/TailwindCSS (Glassmorphism UI)
-- **Storage:** Web File System Access API (Local `.json` vault)
+To run this project, you need to set the following environment variable:
 
-## 🔒 Security
-Celi uses a "Local-First" data architecture. Your journal entries are NEVER stored on the server. They live in a local `.json` file on your device that the browser "handshakes" with.
+- `GEMINI_API_KEY`: Your API key for Google Generative AI (Gemini).
+
+Make sure to replace any previous references to Groq with Google Generative AI and update the corresponding API key.
