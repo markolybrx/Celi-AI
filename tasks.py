@@ -97,3 +97,70 @@ def generate_constellation_name_task(user_id, entry_id, text_block):
         )
     except Exception as e:
         print(f"⚠️ Constellation Name Failed: {e}")
+
+@celery_app.task
+def generate_weekly_insight(user_id):
+    """
+    Analyzes the last 7 days of entries to provide a pattern + advice.
+    """
+    try:
+        # 1. Fetch last 7 days of history
+        cursor = db.history_col.find(
+            {"user_id": user_id}, 
+            {"full_message": 1, "date": 1, "mode": 1}
+        ).sort("timestamp", -1).limit(7)
+        
+        entries = list(cursor)
+        
+        updates = {}
+
+        # 2. Logic: Empty Sky vs. Active Orbit
+        if not entries:
+            # STATE A: Persuasion (Hardcoded to save API costs)
+            updates['weekly_insight'] = {
+                "status": "empty",
+                "text": "The galaxy is quiet. I cannot navigate your stars if they do not exist. Share one small moment from today?",
+                "recommendation": "Start small. Just write one sentence."
+            }
+        else:
+            # STATE B: Active Analysis (Gemini)
+            text_block = "\n".join([f"[{e['date']}]: {e.get('full_message','')}" for e in entries])
+            
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            prompt = f"""
+            Act as Celi, a warm, psychological AI companion.
+            Analyze these user journal entries from the last 7 days.
+            
+            Return a valid JSON object (no markdown formatting) with exactly two fields:
+            1. "observation": A 1-sentence observation about their mood patterns or recurring themes.
+            2. "advice": A 1-sentence specific, actionable micro-strategy or concept (e.g., 'Try the Pomodoro technique', 'Focus on sleep hygiene'). Do not recommend specific URLs.
+            
+            Entries:
+            {text_block}
+            """
+            
+            try:
+                result = model.generate_content(prompt)
+                # Clean the response to ensure it's pure JSON
+                clean_json = result.text.replace('```json', '').replace('```', '').strip()
+                data = json.loads(clean_json)
+                
+                updates['weekly_insight'] = {
+                    "status": "active",
+                    "text": data.get('observation', "I'm analyzing your new patterns."),
+                    "recommendation": data.get('advice', "Keep writing to reveal more stars.")
+                }
+            except:
+                # Fallback if AI JSON fails
+                updates['weekly_insight'] = {
+                    "status": "active",
+                    "text": "I sense complex emotions in your recent entries.",
+                    "recommendation": "Take a moment to breathe deeply before your next task."
+                }
+
+        # 3. Save to User Profile (so it loads fast on dashboard)
+        db.users_col.update_one({"user_id": user_id}, {"$set": updates})
+        print(f"✅ [Worker] Insight generated for {user_id}")
+
+    except Exception as e:
+        print(f"⚠️ Insight Generation Failed: {e}")
