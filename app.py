@@ -13,8 +13,8 @@ import google.generativeai as genai
 
 # --- IMPORT DATABASE & TASKS ---
 import database as db
-# Added generate_weekly_insight to imports
-from tasks import process_entry_analysis, generate_constellation_name_task, generate_weekly_insight
+# Imports for Background Tasks
+from tasks import process_entry_analysis, generate_constellation_name_task, generate_weekly_insight, generate_daily_trivia_task
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
 # --- SETUP LOGGING ---
@@ -180,10 +180,8 @@ def process():
             "embedding": None
         })
 
-        # Trigger Background Tasks
+        # --- TRIGGER BACKGROUND TASKS ---
         process_entry_analysis.delay(timestamp, msg, session['user_id'])
-        
-        # Trigger Weekly Insight Update (New)
         generate_weekly_insight.delay(session['user_id'])
 
         if reward_result.get('event') == 'constellation_complete':
@@ -221,9 +219,21 @@ def get_data():
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
+    # --- HISTORY ---
     history_cursor = db.history_col.find({"user_id": session['user_id']}, {'embedding': 0}).sort("timestamp", 1).limit(50)
     history_list = [serialize_doc(doc) for doc in history_cursor]
     loaded_history = {entry['timestamp']: entry for entry in history_list}
+
+    # --- INFINITE TRIVIA CHECK (Restored Logic) ---
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    current_trivia = user.get("daily_trivia", {})
+    
+    # If trivia is missing or old, trigger generation (Lazy Load)
+    if current_trivia.get("date") != today_str:
+        generate_daily_trivia_task.delay(session['user_id'])
+        daily_trivia = {"fact": "Scouring the universe for today's discovery...", "loading": True}
+    else:
+        daily_trivia = current_trivia
 
     return jsonify({
         "status": "user", 
@@ -245,8 +255,8 @@ def get_data():
         "history": loaded_history, 
         "profile_pic": user.get("profile_pic", ""),
         "progression_tree": progression_tree,
-        # Added Insight Data
-        "weekly_insight": user.get("weekly_insight", None)
+        "weekly_insight": user.get("weekly_insight", None),
+        "daily_trivia": daily_trivia 
     })
 
 @app.route('/api/galaxy_map')
@@ -309,7 +319,7 @@ def update_pfp():
         return jsonify({"status": "error"})
     except: return jsonify({"status": "error"})
 
-# --- RESTORED ROUTES ---
+# --- RESTORED HELPER ROUTES ---
 
 @app.route('/privacy_policy')
 def privacy_policy():
