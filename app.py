@@ -219,12 +219,21 @@ def get_data():
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
-    # --- HISTORY ---
-    history_cursor = db.history_col.find({"user_id": session['user_id']}, {'embedding': 0}).sort("timestamp", 1).limit(50)
+    # --- HISTORY OPTIMIZATION (THE FAST LOADING FIX) ---
+    # We explicitly EXCLUDE heavy fields to make the download instant
+    history_cursor = db.history_col.find(
+        {"user_id": session['user_id']}, 
+        {
+            "full_message": 0,  # Exclude heavy essay text
+            "ai_analysis": 0,   # Exclude heavy analysis
+            "embedding": 0      # Exclude heavy vector data
+        }
+    ).sort("timestamp", 1) # Get all dates for calendar
+    
     history_list = [serialize_doc(doc) for doc in history_cursor]
     loaded_history = {entry['timestamp']: entry for entry in history_list}
 
-    # --- INFINITE TRIVIA CHECK (Restored Logic) ---
+    # --- INFINITE TRIVIA CHECK ---
     today_str = datetime.now().strftime("%Y-%m-%d")
     current_trivia = user.get("daily_trivia", {})
     
@@ -280,6 +289,7 @@ def galaxy_map():
 def star_detail():
     if 'user_id' not in session: return jsonify({"error": "Auth"})
     timestamp = request.json.get('id')
+    # This endpoint fetches the FULL details on demand (Heavy Load)
     entry = db.history_col.find_one({"user_id": session['user_id'], "timestamp": timestamp}, {'embedding': 0})
     if not entry: return jsonify({"error": "Not found"})
     
