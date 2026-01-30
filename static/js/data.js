@@ -59,7 +59,7 @@ async function loadData() {
         const themeBtn = document.getElementById('theme-btn');
         if(themeBtn) themeBtn.innerText = document.documentElement.getAttribute('data-theme') === 'light' ? 'Light' : 'Dark';
 
-        // --- 3. PREPARE HISTORY ---
+        // --- 3. PREPARE HISTORY (LIGHTWEIGHT) ---
         if(data.history) fullChatHistory = data.history; 
         else fullChatHistory = {};
         
