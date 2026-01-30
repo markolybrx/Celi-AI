@@ -18,11 +18,9 @@
         <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
         <div class="absolute inset-0 rounded-full border-2 border-white/30 animate-ping opacity-75"></div>
     </button>
-
 </div>
 
 <script>
-    // --- DAILY PROMPTS LOGIC ---
     const PROMPTS = [
         "Mission Log: What is the single most important coordinate (task) you need to reach today?",
         "If you could teleport to the end of the day, what would you want to have accomplished?",
@@ -39,22 +37,12 @@
     function loadBubblePrompt() {
         const bubble = document.getElementById('celi-bubble');
         const text = document.getElementById('celi-bubble-text');
-        
-        // Pick prompt based on Day of Year
         const dayOfYear = Math.floor((new Date() - new Date(new Date().getFullYear(), 0, 0)) / 1000 / 60 / 60 / 24);
         const prompt = PROMPTS[dayOfYear % PROMPTS.length];
         
         text.innerText = prompt;
-
-        // Show after 2 seconds
-        setTimeout(() => {
-            if(bubble) {
-                bubble.classList.remove('hidden');
-                setTimeout(() => bubble.classList.remove('translate-y-4', 'opacity-0'), 10);
-            }
-        }, 2000);
+        setTimeout(() => { if(bubble) { bubble.classList.remove('hidden'); setTimeout(() => bubble.classList.remove('translate-y-4', 'opacity-0'), 10); } }, 2000);
     }
-
     function useBubblePrompt() {
         const txt = document.getElementById('celi-bubble-text').innerText;
         document.getElementById('chat-input').value = `[Prompt: ${txt}] \n\n`;
@@ -62,13 +50,10 @@
         closeBubble();
         setTimeout(() => document.getElementById('chat-input').focus(), 500);
     }
-
     function closeBubble() {
         const bubble = document.getElementById('celi-bubble');
         bubble.classList.add('opacity-0', 'translate-y-4');
         setTimeout(() => bubble.classList.add('hidden'), 500);
     }
-
-    // Initialize
     loadBubblePrompt();
 </script>
