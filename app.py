@@ -14,7 +14,12 @@ import google.generativeai as genai
 # --- IMPORT DATABASE & TASKS ---
 import database as db
 # Imports for Background Tasks
-from tasks import process_entry_analysis, generate_constellation_name_task, generate_weekly_insight, generate_daily_trivia_task
+# We wrap these to prevent crash if tasks.py has a syntax error
+try:
+    from tasks import process_entry_analysis, generate_constellation_name_task, generate_weekly_insight, generate_daily_trivia_task
+except ImportError:
+    print("⚠️ Warning: Could not import tasks. Background jobs may not work.")
+
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
 # --- SETUP LOGGING ---
@@ -60,7 +65,8 @@ def serialize_doc(doc):
 # ==================================================
 
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
-    candidates = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+    # FIXED: Use stable, existing models
+    candidates = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
     
     memory_block = ""
     if context_memories:
@@ -80,7 +86,9 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
             model = genai.GenerativeModel(m, system_instruction=system_instruction)
             response = model.generate_content(content)
             return response.text.strip()
-        except: continue
+        except Exception as e:
+            print(f"⚠️ Model {m} failed: {e}")
+            continue
     
     return "Signal Lost. I heard you, but I cannot speak right now."
 
@@ -131,18 +139,29 @@ def logout(): session.clear(); return redirect(url_for('login_page'))
 def process():
     if 'user_id' not in session: return jsonify({"reply": "Session Expired"}), 401
     try:
+        # Check DB Connection first
+        if db.history_col is None:
+            return jsonify({"reply": "Database connection lost. Please check server."}), 500
+
         msg = request.form.get('message', '')
         mode = request.form.get('mode', 'journal')
         image_file = request.files.get('media')
         audio_file = request.files.get('audio')
         timestamp = str(datetime.now().timestamp())
 
-        media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype) if image_file else None
-        audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype) if audio_file else None
+        media_id = None
+        if image_file and db.fs:
+             media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype)
+        
+        audio_id = None
+        if audio_file and db.fs:
+             audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype)
         
         image_bytes = None
-        if media_id:
-            image_bytes = db.fs.get(media_id).read()
+        if media_id and db.fs:
+            try:
+                image_bytes = db.fs.get(media_id).read()
+            except: pass
 
         past_memories = []
         if msg and len(msg) > 10:
@@ -164,6 +183,7 @@ def process():
                 reply = generate_immediate_reply(msg, image_bytes, image_file.mimetype if image_file else None, False, past_memories)
                 if "open The Void" in reply: session['awaiting_void_confirm'] = True
 
+        # Insert to DB
         db.history_col.insert_one({
             "user_id": session['user_id'],
             "timestamp": timestamp,
@@ -180,14 +200,20 @@ def process():
             "embedding": None
         })
 
-        # --- TRIGGER BACKGROUND TASKS ---
-        process_entry_analysis.delay(timestamp, msg, session['user_id'])
-        generate_weekly_insight.delay(session['user_id'])
+        # --- TRIGGER BACKGROUND TASKS (With Safety Guards) ---
+        try:
+            process_entry_analysis.delay(timestamp, msg, session['user_id'])
+            generate_weekly_insight.delay(session['user_id'])
+        except Exception as e:
+            print(f"⚠️ Background Task Error: {e}") 
+            # We do NOT crash the chat if analysis fails. Chat is priority.
 
         if reward_result.get('event') == 'constellation_complete':
-            last_entries = db.history_col.find({"user_id": session['user_id']}, {'full_message': 1}).sort("timestamp", -1).limit(6)
-            text_block = msg + " " + " ".join([e.get('full_message','') for e in last_entries])
-            generate_constellation_name_task.delay(session['user_id'], timestamp, text_block)
+            try:
+                last_entries = db.history_col.find({"user_id": session['user_id']}, {'full_message': 1}).sort("timestamp", -1).limit(6)
+                text_block = msg + " " + " ".join([e.get('full_message','') for e in last_entries])
+                generate_constellation_name_task.delay(session['user_id'], timestamp, text_block)
+            except: pass
 
         command = None
         level_check = update_rank_check(db.users_col, session['user_id'])
@@ -220,15 +246,14 @@ def get_data():
     current_dust = user.get('stardust', 0)
 
     # --- HISTORY OPTIMIZATION (THE FAST LOADING FIX) ---
-    # We explicitly EXCLUDE heavy fields to make the download instant
     history_cursor = db.history_col.find(
         {"user_id": session['user_id']}, 
         {
-            "full_message": 0,  # Exclude heavy essay text
-            "ai_analysis": 0,   # Exclude heavy analysis
-            "embedding": 0      # Exclude heavy vector data
+            "full_message": 0,  
+            "ai_analysis": 0,   
+            "embedding": 0      
         }
-    ).sort("timestamp", 1) # Get all dates for calendar
+    ).sort("timestamp", 1) 
     
     history_list = [serialize_doc(doc) for doc in history_cursor]
     loaded_history = {entry['timestamp']: entry for entry in history_list}
@@ -237,10 +262,14 @@ def get_data():
     today_str = datetime.now().strftime("%Y-%m-%d")
     current_trivia = user.get("daily_trivia", {})
     
-    # If trivia is missing or old, trigger generation (Lazy Load)
     if current_trivia.get("date") != today_str:
-        generate_daily_trivia_task.delay(session['user_id'])
-        daily_trivia = {"fact": "Scouring the universe for today's discovery...", "loading": True}
+        try:
+            from tasks import generate_daily_trivia_task 
+            generate_daily_trivia_task.delay(session['user_id'])
+            daily_trivia = {"fact": "Scouring the universe for today's discovery...", "loading": True}
+        except Exception as e:
+            print(f"⚠️ Trivia Task Error: {e}")
+            daily_trivia = {"fact": "Communication relay offline.", "loading": False}
     else:
         daily_trivia = current_trivia
 
@@ -289,7 +318,6 @@ def galaxy_map():
 def star_detail():
     if 'user_id' not in session: return jsonify({"error": "Auth"})
     timestamp = request.json.get('id')
-    # This endpoint fetches the FULL details on demand (Heavy Load)
     entry = db.history_col.find_one({"user_id": session['user_id'], "timestamp": timestamp}, {'embedding': 0})
     if not entry: return jsonify({"error": "Not found"})
     
