@@ -37,7 +37,6 @@ api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key:
     print("❌ CRITICAL: GEMINI_API_KEY is missing from environment variables!")
 else:
-    # Clean the key of any accidental quotes/spaces
     clean_key = api_key.strip().replace("'", "").replace('"', "")
     genai.configure(api_key=clean_key)
     print("✅ AI Core Online")
@@ -55,42 +54,49 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (SIMPLIFIED)
+#           AI ENGINE (ROBUST FALLBACK)
 # ==================================================
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
     """
-    Generates chat response. 
-    Fixed to use the stable 'gemini-1.5-flash' model to prevent 'Signal Lost'.
+    Generates chat response using a cascading list of models.
+    Tries Gemini 2.0 -> 1.5 Pro -> 1.5 Flash to ensure success.
     """
-    try:
-        # Construct Context Block
-        memory_block = ""
-        if context_memories:
-            memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
+    # The list of models to try, in order of preference
+    # Note: 2.5/3.0 are not public yet, so we use 2.0-flash-exp as the cutting edge
+    candidates = [
+        "gemini-2.0-flash-exp", 
+        "gemini-1.5-pro", 
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash"
+    ]
 
-        # System Prompt
-        role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
-        system_instruction = role + memory_block
+    # Construct Context
+    memory_block = ""
+    if context_memories:
+        memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
 
-        # Build Payload
-        content = [msg]
-        if media_bytes and media_mime:
-            content.append({'mime_type': media_mime, 'data': media_bytes})
+    role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
+    system_instruction = role + memory_block
 
-        # Generate (Using the most reliable model)
-        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
-        response = model.generate_content(content)
-        
-        return response.text.strip()
+    content = [msg]
+    if media_bytes and media_mime:
+        content.append({'mime_type': media_mime, 'data': media_bytes})
 
-    except Exception as e:
-        print(f"❌ AI GENERATION ERROR: {e}") # Check your server console if this happens!
-        return "I'm having trouble connecting to the stars right now. Let's try again in a moment."
+    # Try each model until one works
+    for model_name in candidates:
+        try:
+            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            response = model.generate_content(content)
+            return response.text.strip()
+        except Exception as e:
+            print(f"⚠️ Model {model_name} failed: {e}")
+            continue # Try the next one
+
+    return "Signal Lost. I heard you, but I cannot speak right now."
 
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
     try:
-        # Use a lightweight embedding check
         result = genai.embed_content(model="models/text-embedding-004", content=query_text)
         query_vector = result['embedding']
         pipeline = [
@@ -194,7 +200,6 @@ def get_data():
     current_dust = user.get('stardust', 0)
 
     # 3. HISTORY OPTIMIZATION (THE FIX)
-    # Explicitly exclude heavy fields. Instant download.
     history_cursor = db.history_col.find(
         {"user_id": session['user_id']}, 
         {"full_message": 0, "ai_analysis": 0, "embedding": 0}
@@ -241,7 +246,7 @@ def get_data():
 @app.route('/api/galaxy_map')
 def galaxy_map():
     if 'user_id' not in session: return jsonify([])
-    cursor = db.history_col.find({"user_id": session['user_id']}, {'_id': 0, 'full_message': 0, 'embedding': 0}).sort("timestamp", 1)
+    cursor = db.history_col.find({"user_id": session['user_id']}, {'_id': 0, 'full_message': 0, 'reply': 0, 'embedding': 0}).sort("timestamp", 1)
     stars = [serialize_doc(doc) for doc in cursor]
     return jsonify([{**doc, "id": doc['timestamp'], "group": i//7, "type": "void" if doc.get('mode')=='rant' else "journal"} for i, doc in enumerate(stars)])
 
