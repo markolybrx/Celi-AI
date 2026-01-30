@@ -1,10 +1,9 @@
 flask
-flask_session
+flask-session
 pymongo
-google-generativeai
+dnspython
 redis
-celery
 gunicorn
-gevent
-requests
-certifi
+google-generativeai>=0.8.3
+pillow
+celery
