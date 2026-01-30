@@ -39,7 +39,14 @@ if not api_key:
 else:
     clean_key = api_key.strip().replace("'", "").replace('"', "")
     genai.configure(api_key=clean_key)
-    print("✅ AI Core Online")
+    print("✅ AI Core Online. Validating models...")
+    try:
+        # Diagnostic: Print available models to logs to debug 404 errors
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f"   - Available: {m.name}")
+    except Exception as e:
+        print(f"⚠️ Could not list models: {e}")
 
 # ==================================================
 #           HELPER: JSON SERIALIZER
@@ -54,45 +61,34 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (ROBUST FALLBACK)
+#           AI ENGINE (STABLE 1.5)
 # ==================================================
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
     """
-    Generates chat response using a cascading list of models.
-    Tries Gemini 2.0 -> 1.5 Pro -> 1.5 Flash to ensure success.
+    Generates chat response using the STABLE Gemini 1.5 Flash model.
     """
-    # The list of models to try, in order of preference
-    # Note: 2.5/3.0 are not public yet, so we use 2.0-flash-exp as the cutting edge
-    candidates = [
-        "gemini-2.0-flash-exp", 
-        "gemini-1.5-pro", 
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash"
-    ]
+    try:
+        # Construct Context
+        memory_block = ""
+        if context_memories:
+            memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
 
-    # Construct Context
-    memory_block = ""
-    if context_memories:
-        memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
+        role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
+        system_instruction = role + memory_block
 
-    role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
-    system_instruction = role + memory_block
+        content = [msg]
+        if media_bytes and media_mime:
+            content.append({'mime_type': media_mime, 'data': media_bytes})
 
-    content = [msg]
-    if media_bytes and media_mime:
-        content.append({'mime_type': media_mime, 'data': media_bytes})
+        # MODEL SELECTION: 1.5 Flash is the current stable standard.
+        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
+        
+        response = model.generate_content(content)
+        return response.text.strip()
 
-    # Try each model until one works
-    for model_name in candidates:
-        try:
-            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
-            response = model.generate_content(content)
-            return response.text.strip()
-        except Exception as e:
-            print(f"⚠️ Model {model_name} failed: {e}")
-            continue # Try the next one
-
-    return "Signal Lost. I heard you, but I cannot speak right now."
+    except Exception as e:
+        print(f"❌ AI GENERATION ERROR: {e}")
+        return "I'm listening, but my connection to the stars is a bit faint right now. I've saved your entry."
 
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
@@ -199,7 +195,7 @@ def get_data():
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
-    # 3. HISTORY OPTIMIZATION (THE FIX)
+    # 3. HISTORY OPTIMIZATION
     history_cursor = db.history_col.find(
         {"user_id": session['user_id']}, 
         {"full_message": 0, "ai_analysis": 0, "embedding": 0}
