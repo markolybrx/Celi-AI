@@ -4,6 +4,7 @@ import traceback
 import uuid
 import json
 import time
+import requests
 from bson.objectid import ObjectId
 from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for, session, Response
 from flask_session import Session
@@ -54,47 +55,62 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE
+#           AI ENGINE (BULLETPROOF FALLBACK)
 # ==================================================
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
     """
-    Generates chat response. Includes a fallback to standard 'gemini-pro' 
-    if 'flash' fails due to old libraries.
+    Tries the SDK first. If it crashes (404/Old Library), it manually hits the HTTP API.
     """
+    # 1. Prepare Prompt
+    memory_block = ""
+    if context_memories:
+        memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
+
+    role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
+    system_instruction = role + memory_block
+
+    # --- METHOD A: STANDARD LIBRARY ---
     try:
-        # Construct Context
-        memory_block = ""
-        if context_memories:
-            memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
-
-        role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
-        system_instruction = role + memory_block
-
         content = [msg]
         if media_bytes and media_mime:
             content.append({'mime_type': media_mime, 'data': media_bytes})
-
-        # ATTEMPT 1: Modern Flash Model
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
-            response = model.generate_content(content)
-            return response.text.strip()
-        except Exception:
-            # ATTEMPT 2: Fallback to Legacy Model (Safeguard for old libraries)
-            print("⚠️ 1.5 Flash failed, trying gemini-pro")
-            model = genai.GenerativeModel("gemini-pro")
-            # Gemini-Pro doesn't take system_instruction in init, so we prepend it
-            full_prompt = f"{system_instruction}\n\nUser: {msg}"
-            response = model.generate_content(full_prompt)
-            return response.text.strip()
-
+        
+        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
+        response = model.generate_content(content)
+        return response.text.strip()
+    
     except Exception as e:
-        print(f"❌ AI GENERATION ERROR: {e}")
-        return "I'm listening, but my connection to the stars is a bit faint right now. I've saved your entry."
+        print(f"⚠️ SDK Failed ({e}). Switching to Direct HTTP...")
+
+    # --- METHOD B: DIRECT HTTP FALLBACK (The Nuclear Option) ---
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={clean_key}"
+        
+        # Simple text payload (Complex media omitted in fallback for stability)
+        payload = {
+            "contents": [{
+                "parts": [{"text": f"{system_instruction}\n\nUser: {msg}"}]
+            }]
+        }
+        
+        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+        data = response.json()
+        
+        # Extract text from raw JSON
+        if "candidates" in data and len(data["candidates"]) > 0:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        else:
+            print(f"❌ API Error: {data}")
+            return "My connection is fuzzy, but I'm here."
+
+    except Exception as e2:
+        print(f"❌ ALL AI METHODS FAILED: {e2}")
+        return "I'm listening, but the stars are silent right now. I've saved your entry."
 
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
     try:
+        # We also wrap embedding in a try/catch to prevent crashes
         result = genai.embed_content(model="models/text-embedding-004", content=query_text)
         query_vector = result['embedding']
         pipeline = [
@@ -156,21 +172,19 @@ def process():
             (mode == 'rant'), past_memories
         )
 
-        # --- FIX: INSTANT SUMMARY GENERATION ---
-        # Instead of "Processing...", we create a snippet immediately.
-        # This prevents the UI from getting stuck if background tasks fail.
+        # --- INSTANT SUMMARY GENERATION (Fixes "Processing..." forever) ---
         instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
 
         # Database Save
         db.history_col.insert_one({
             "user_id": session['user_id'], "timestamp": timestamp, "date": datetime.now().strftime("%Y-%m-%d"),
-            "summary": instant_summary, # <--- FIXED
+            "summary": instant_summary, 
             "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode,
             "has_media": bool(media_id), "media_file_id": media_id, "has_audio": bool(audio_id), "audio_file_id": audio_id,
             "constellation_name": None, "is_valid_star": reward_result['awarded'], "embedding": None
         })
 
-        # Background Tasks (Wrapped in Try/Catch so they don't crash chat)
+        # Background Tasks (Silent Fail)
         try:
             process_entry_analysis.delay(timestamp, msg, session['user_id'])
             generate_weekly_insight.delay(session['user_id'])
@@ -245,16 +259,6 @@ def get_data():
         "weekly_insight": user.get("weekly_insight", None),
         "daily_trivia": daily_trivia
     })
-
-# --- DEBUG ROUTE TO TEST AI ---
-@app.route('/debug_ai')
-def debug_ai():
-    try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content("Hello")
-        return f"AI Connection Successful! Response: {response.text}"
-    except Exception as e:
-        return f"AI Failed: {str(e)}"
 
 # --- SUPPORTING ROUTES ---
 @app.route('/api/galaxy_map')
