@@ -34,6 +34,9 @@ server_session = Session(app)
 # --- AI CONFIGURATION ---
 api_key = os.environ.get("GEMINI_API_KEY")
 clean_key = ""
+# Global variable to cache the working model so we don't scan every time
+CACHED_MODEL_NAME = None 
+
 if not api_key:
     print("❌ CRITICAL: GEMINI_API_KEY is missing!")
 else:
@@ -57,8 +60,14 @@ def serialize_doc(doc):
 def get_valid_model_name():
     """
     Asks Google for a list of available models and returns the first one that works.
-    Prevents 404 Model Not Found errors.
+    Uses caching to speed up subsequent requests.
     """
+    global CACHED_MODEL_NAME
+    
+    # 1. Return cached model if we already found one
+    if CACHED_MODEL_NAME:
+        return CACHED_MODEL_NAME
+
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
         response = requests.get(url)
@@ -69,16 +78,27 @@ def get_valid_model_name():
             return None
 
         # Look for the best model
-        preferred_order = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro", "gemini-pro"]
+        # We explicitly add the one that worked for you (gemini-2.5-flash) to the top priority
+        preferred_order = [
+            "gemini-2.5-flash", 
+            "gemini-2.0-flash-exp", 
+            "gemini-1.5-flash", 
+            "gemini-1.5-pro", 
+            "gemini-pro"
+        ]
+        
         available_models = [m['name'].replace("models/", "") for m in data.get('models', []) if 'generateContent' in m['supportedGenerationMethods']]
         
-        # 1. Check if any preferred model is available
+        # 2. Check if any preferred model is available
         for pref in preferred_order:
             if pref in available_models:
+                CACHED_MODEL_NAME = pref # Cache it!
+                print(f"🔹 Model Discovered & Cached: {pref}")
                 return pref
         
-        # 2. Fallback: Use the very first available model
+        # 3. Fallback: Use the very first available model
         if available_models:
+            CACHED_MODEL_NAME = available_models[0]
             return available_models[0]
             
         return None
@@ -90,12 +110,10 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
     """
     Uses the discovered model to generate a reply.
     """
-    # 1. DISCOVER MODEL
+    # 1. DISCOVER MODEL (Or use Cached)
     model_name = get_valid_model_name()
     if not model_name:
         return "Critical Error: Your API Key cannot access any Google AI models. Please check your billing/quota."
-
-    print(f"🤖 Using Auto-Discovered Model: {model_name}")
 
     # 2. PREPARE PROMPT
     memory_block = ""
@@ -180,16 +198,20 @@ def process():
             (mode == 'rant'), past_memories
         )
 
+        # --- INSTANT SUMMARY GENERATION ---
+        # Fixed: Calculate summary HERE instead of waiting for background task
         instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
 
+        # Database Save
         db.history_col.insert_one({
             "user_id": session['user_id'], "timestamp": timestamp, "date": datetime.now().strftime("%Y-%m-%d"),
-            "summary": instant_summary, 
+            "summary": instant_summary,  # Saving the instant summary
             "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode,
             "has_media": bool(media_id), "media_file_id": media_id, "has_audio": bool(audio_id), "audio_file_id": audio_id,
             "constellation_name": None, "is_valid_star": reward_result['awarded'], "embedding": None
         })
 
+        # Background Tasks (Silent Fail)
         try:
             process_entry_analysis.delay(timestamp, msg, session['user_id'])
             generate_weekly_insight.delay(session['user_id'])
@@ -219,6 +241,7 @@ def get_data():
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
+    # Lightweight History (Fast Load)
     history_cursor = db.history_col.find(
         {"user_id": session['user_id']}, 
         {"full_message": 0, "ai_analysis": 0, "embedding": 0}
