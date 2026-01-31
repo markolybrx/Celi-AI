@@ -16,7 +16,7 @@ import database as db
 # --- SETUP APP ---
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'celi_super_secret_key_999')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'Celi_S3cur3_K3y_v2_99!')
 app.config['SESSION_TYPE'] = 'redis'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
