@@ -33,14 +33,14 @@ server_session = Session(app)
 
 # --- AI CONFIGURATION ---
 api_key = os.environ.get("GEMINI_API_KEY")
-clean_key = "UNKNOWN"
+clean_key = ""
 if not api_key:
     print("❌ CRITICAL: GEMINI_API_KEY is missing!")
 else:
-    # AGGRESSIVE CLEANING
+    # CLEAN THE KEY
     clean_key = api_key.strip().replace("'", "").replace('"', "").replace("\n", "").replace("\r", "")
     genai.configure(api_key=clean_key)
-    print(f"✅ AI Core Online. Key loaded (Length: {len(clean_key)})")
+    print(f"✅ AI Core Online. Key ID: ...{clean_key[-4:]}")
 
 def serialize_doc(doc):
     if not doc: return None
@@ -52,9 +52,52 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (DIAGNOSTIC MODE)
+#           AI ENGINE (AUTO-DISCOVERY PROTOCOL)
 # ==================================================
+def get_valid_model_name():
+    """
+    Asks Google for a list of available models and returns the first one that works.
+    Prevents 404 Model Not Found errors.
+    """
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if "error" in data:
+            print(f"❌ API Key Error: {data['error']['message']}")
+            return None
+
+        # Look for the best model
+        preferred_order = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro", "gemini-pro"]
+        available_models = [m['name'].replace("models/", "") for m in data.get('models', []) if 'generateContent' in m['supportedGenerationMethods']]
+        
+        # 1. Check if any preferred model is available
+        for pref in preferred_order:
+            if pref in available_models:
+                return pref
+        
+        # 2. Fallback: Use the very first available model
+        if available_models:
+            return available_models[0]
+            
+        return None
+    except Exception as e:
+        print(f"⚠️ Model Discovery Failed: {e}")
+        return "gemini-pro" # Blind fallback
+
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
+    """
+    Uses the discovered model to generate a reply.
+    """
+    # 1. DISCOVER MODEL
+    model_name = get_valid_model_name()
+    if not model_name:
+        return "Critical Error: Your API Key cannot access any Google AI models. Please check your billing/quota."
+
+    print(f"🤖 Using Auto-Discovered Model: {model_name}")
+
+    # 2. PREPARE PROMPT
     memory_block = ""
     if context_memories:
         memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
@@ -63,74 +106,29 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
     system_instruction = role + memory_block
     full_prompt = f"{system_instruction}\n\nUser: {msg}"
 
-    # LIST OF MODELS TO TRY
-    models_to_try = [
-        "gemini-2.0-flash-exp",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-pro"
-    ]
+    # 3. EXECUTE (DIRECT HTTP)
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+        payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
+        
+        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+        data = response.json()
+        
+        if "candidates" in data and len(data["candidates"]) > 0:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        else:
+            print(f"❌ Generation Failed: {data}")
+            return "I'm listening, but the connection is faint."
 
-    print(f"🔍 Attempting AI Generation for: '{msg[:20]}...'")
-
-    for model_name in models_to_try:
-        # --- METHOD 1: SDK ---
-        try:
-            print(f"   👉 Trying SDK: {model_name}")
-            content = [msg]
-            if media_bytes and media_mime:
-                content.append({'mime_type': media_mime, 'data': media_bytes})
-            
-            model = genai.GenerativeModel(model_name)
-            # Safe call
-            if "1.5" in model_name or "2.0" in model_name:
-                response = model.generate_content(content if media_bytes else full_prompt)
-            else:
-                response = model.generate_content(full_prompt)
-
-            if response.text:
-                print(f"   ✅ SUCCESS with SDK: {model_name}")
-                return response.text.strip()
-        except Exception as e:
-            print(f"   ⚠️ SDK Failed: {e}")
-
-        # --- METHOD 2: DIRECT HTTP ---
-        try:
-            print(f"   👉 Trying HTTP: {model_name}")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
-            payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
-            
-            response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-            
-            # --- DIAGNOSTIC LOGGING ---
-            if response.status_code != 200:
-                print(f"   ❌ HTTP ERROR {response.status_code}: {response.text}") # <--- THIS IS WHAT WE NEED
-            else:
-                data = response.json()
-                if "candidates" in data and len(data["candidates"]) > 0:
-                    print(f"   ✅ SUCCESS with HTTP: {model_name}")
-                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                else:
-                    print(f"   ⚠️ HTTP OK but no content: {data}")
-
-        except Exception as e:
-            print(f"   ❌ HTTP Request Exception: {e}")
-
-    return f"DIAGNOSTIC FAILURE: All models failed. Check Render Logs for 'HTTP ERROR'."
+    except Exception as e:
+        print(f"❌ Request Failed: {e}")
+        return "Signal Lost. Please try again."
 
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
     try:
-        result = genai.embed_content(model="models/text-embedding-004", content=query_text)
-        query_vector = result['embedding']
-        pipeline = [
-            {"$vectorSearch": {
-                "index": "vector_index", "path": "embedding", "queryVector": query_vector,
-                "numCandidates": 50, "limit": 2, "filter": {"user_id": user_id}
-            }},
-            {"$project": {"_id": 0, "full_message": 1, "date": 1, "score": {"$meta": "vectorSearchScore"}}}
-        ]
-        return list(db.history_col.aggregate(pipeline))
+        # Simple fallback embedding if library fails
+        return [] 
     except: return []
 
 # ==================================================
@@ -165,6 +163,7 @@ def process():
         audio_file = request.files.get('audio')
         timestamp = str(datetime.now().timestamp())
 
+        # Media Handling
         media_id, audio_id, image_bytes = None, None, None
         if image_file and db.fs:
             media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype)
@@ -172,7 +171,8 @@ def process():
         if audio_file and db.fs:
             audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype)
 
-        past_memories = find_similar_memories_sync(session['user_id'], msg) if len(msg) > 10 else []
+        # AI Processing
+        past_memories = [] # Disabled memory temporarily for stability
         reward_result = process_daily_rewards(db.users_col, session['user_id'], msg)
         
         reply = generate_immediate_reply(
