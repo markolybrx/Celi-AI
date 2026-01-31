@@ -6,9 +6,16 @@
     <title>Celi: AI Journal</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#0f172a">
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/animations.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/layout.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/ranks.css') }}">
 </head>
 <body class="bg-gray-900 text-gray-100 font-sans antialiased overflow-hidden selection:bg-indigo-500 selection:text-white">
 
@@ -35,7 +42,8 @@
     {% include 'components/modals/archive_modal.html' %}
     {% include 'components/modals/profile.html' %}
     {% include 'components/modals/chat.html' %}
-    {% include 'components/modals/rank_tree.html' %} 
+    {% include 'components/modals/rank_tree.html' %}
+    {% include 'components/modals/edit_info.html' %}
     
     <script src="{{ url_for('static', filename='js/data.js') }}"></script>
     <script src="{{ url_for('static', filename='js/ui.js') }}"></script>
@@ -43,7 +51,7 @@
     
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            loadData();
+            if(typeof loadData === "function") loadData();
         });
     </script>
 </body>
