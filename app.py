@@ -12,7 +12,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import google.generativeai as genai
 
-# --- IMPORT DATABASE ---
 import database as db
 
 # --- SAFETY IMPORT FOR TASKS ---
@@ -23,7 +22,6 @@ except ImportError:
 
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
-# --- SETUP APP ---
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'celi_super_secret_key_999')
@@ -35,16 +33,15 @@ server_session = Session(app)
 
 # --- AI CONFIGURATION ---
 api_key = os.environ.get("GEMINI_API_KEY")
+clean_key = "UNKNOWN"
 if not api_key:
-    print("❌ CRITICAL: GEMINI_API_KEY is missing from environment variables!")
+    print("❌ CRITICAL: GEMINI_API_KEY is missing!")
 else:
-    clean_key = api_key.strip().replace("'", "").replace('"', "")
+    # AGGRESSIVE CLEANING
+    clean_key = api_key.strip().replace("'", "").replace('"', "").replace("\n", "").replace("\r", "")
     genai.configure(api_key=clean_key)
-    print("✅ AI Core Online")
+    print(f"✅ AI Core Online. Key loaded (Length: {len(clean_key)})")
 
-# ==================================================
-#           HELPER: JSON SERIALIZER
-# ==================================================
 def serialize_doc(doc):
     if not doc: return None
     if isinstance(doc, list): return [serialize_doc(d) for d in doc]
@@ -55,16 +52,9 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (USER PREFERRED PRIORITY)
+#           AI ENGINE (DIAGNOSTIC MODE)
 # ==================================================
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
-    """
-    PRIORITY ORDER:
-    1. Gemini 2.0 Flash Exp (User Request)
-    2. Gemini 1.5 Flash (Backup)
-    3. Gemini Pro (Legacy Backup)
-    """
-    # 1. Prepare Context
     memory_block = ""
     if context_memories:
         memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
@@ -73,57 +63,64 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
     system_instruction = role + memory_block
     full_prompt = f"{system_instruction}\n\nUser: {msg}"
 
-    # 2. PRIORITY LIST (Put 2.0 First)
+    # LIST OF MODELS TO TRY
     models_to_try = [
-        "gemini-2.0-flash-exp",  # <--- YOUR PREFERENCE
+        "gemini-2.0-flash-exp",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
         "gemini-pro"
     ]
 
-    # 3. The Loop
+    print(f"🔍 Attempting AI Generation for: '{msg[:20]}...'")
+
     for model_name in models_to_try:
-        # --- ATTEMPT A: SDK ---
+        # --- METHOD 1: SDK ---
         try:
+            print(f"   👉 Trying SDK: {model_name}")
             content = [msg]
             if media_bytes and media_mime:
                 content.append({'mime_type': media_mime, 'data': media_bytes})
             
             model = genai.GenerativeModel(model_name)
-            # Safe call handling
+            # Safe call
             if "1.5" in model_name or "2.0" in model_name:
-                # Newer models support system_instruction in init, but we use full_prompt to be safe across versions
                 response = model.generate_content(content if media_bytes else full_prompt)
             else:
                 response = model.generate_content(full_prompt)
-            
-            if response.text:
-                return response.text.strip()
-        except Exception:
-            pass # Silently fail and try HTTP
 
-        # --- ATTEMPT B: DIRECT HTTP ---
+            if response.text:
+                print(f"   ✅ SUCCESS with SDK: {model_name}")
+                return response.text.strip()
+        except Exception as e:
+            print(f"   ⚠️ SDK Failed: {e}")
+
+        # --- METHOD 2: DIRECT HTTP ---
         try:
+            print(f"   👉 Trying HTTP: {model_name}")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
             payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
             
             response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-            data = response.json()
             
-            if "candidates" in data and len(data["candidates"]) > 0:
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            
-        except Exception:
-            pass # Fail and try next model
+            # --- DIAGNOSTIC LOGGING ---
+            if response.status_code != 200:
+                print(f"   ❌ HTTP ERROR {response.status_code}: {response.text}") # <--- THIS IS WHAT WE NEED
+            else:
+                data = response.json()
+                if "candidates" in data and len(data["candidates"]) > 0:
+                    print(f"   ✅ SUCCESS with HTTP: {model_name}")
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                else:
+                    print(f"   ⚠️ HTTP OK but no content: {data}")
 
-    # 4. Total Failure Fallback
-    print("❌ ALL AI MODELS FAILED. Check API Key permissions.")
-    return "I'm listening, but the stars are silent right now. I've saved your entry."
+        except Exception as e:
+            print(f"   ❌ HTTP Request Exception: {e}")
+
+    return f"DIAGNOSTIC FAILURE: All models failed. Check Render Logs for 'HTTP ERROR'."
 
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
     try:
-        # Wrap embedding in try/catch to prevent crashes
         result = genai.embed_content(model="models/text-embedding-004", content=query_text)
         query_vector = result['embedding']
         pipeline = [
@@ -168,7 +165,6 @@ def process():
         audio_file = request.files.get('audio')
         timestamp = str(datetime.now().timestamp())
 
-        # Media Handling
         media_id, audio_id, image_bytes = None, None, None
         if image_file and db.fs:
             media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype)
@@ -176,7 +172,6 @@ def process():
         if audio_file and db.fs:
             audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype)
 
-        # AI Processing
         past_memories = find_similar_memories_sync(session['user_id'], msg) if len(msg) > 10 else []
         reward_result = process_daily_rewards(db.users_col, session['user_id'], msg)
         
@@ -185,10 +180,8 @@ def process():
             (mode == 'rant'), past_memories
         )
 
-        # Instant Summary (No "Processing...")
         instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
 
-        # Database Save
         db.history_col.insert_one({
             "user_id": session['user_id'], "timestamp": timestamp, "date": datetime.now().strftime("%Y-%m-%d"),
             "summary": instant_summary, 
@@ -197,13 +190,11 @@ def process():
             "constellation_name": None, "is_valid_star": reward_result['awarded'], "embedding": None
         })
 
-        # Background Tasks (Silent Fail)
         try:
             process_entry_analysis.delay(timestamp, msg, session['user_id'])
             generate_weekly_insight.delay(session['user_id'])
         except: pass
 
-        # Reward Check
         command, system_msg = None, ""
         if update_rank_check(db.users_col, session['user_id']) == "level_up":
             command, system_msg = "level_up", f"\n\n[System]: Level Up! {reward_result.get('message', '')}"
@@ -213,24 +204,21 @@ def process():
         return jsonify({"reply": reply + system_msg, "command": command})
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"reply": "Signal Lost. Please try again."}), 500
+        return jsonify({"reply": f"Signal Lost: {str(e)}"}), 500
 
 @app.route('/api/data')
 def get_data():
     if 'user_id' not in session: return jsonify({"status": "guest"}), 401
     
-    # 1. Fetch User (Fast)
     user = db.users_col.find_one({"user_id": session['user_id']})
     if not user: return jsonify({"status": "error"}), 404
     user = serialize_doc(user)
 
-    # 2. Calc Rank
     rank_info = get_rank_meta(user.get('rank_index', 0))
     progression_tree = get_all_ranks_data()
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
-    # 3. HISTORY OPTIMIZATION
     history_cursor = db.history_col.find(
         {"user_id": session['user_id']}, 
         {"full_message": 0, "ai_analysis": 0, "embedding": 0}
@@ -238,7 +226,6 @@ def get_data():
     
     loaded_history = {doc['timestamp']: serialize_doc(doc) for doc in history_cursor}
 
-    # 4. Trivia Check
     today_str = datetime.now().strftime("%Y-%m-%d")
     current_trivia = user.get("daily_trivia", {})
     if current_trivia.get("date") != today_str:
