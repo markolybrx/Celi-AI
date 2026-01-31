@@ -55,62 +55,75 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (BULLETPROOF FALLBACK)
+#           AI ENGINE (USER PREFERRED PRIORITY)
 # ==================================================
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
     """
-    Tries the SDK first. If it crashes (404/Old Library), it manually hits the HTTP API.
+    PRIORITY ORDER:
+    1. Gemini 2.0 Flash Exp (User Request)
+    2. Gemini 1.5 Flash (Backup)
+    3. Gemini Pro (Legacy Backup)
     """
-    # 1. Prepare Prompt
+    # 1. Prepare Context
     memory_block = ""
     if context_memories:
         memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
 
     role = "You are 'The Void'. Absorb pain. Be silent." if is_void else "You are Celi. A warm, adaptive AI companion. Keep responses short (max 2-3 sentences) and human-like."
     system_instruction = role + memory_block
+    full_prompt = f"{system_instruction}\n\nUser: {msg}"
 
-    # --- METHOD A: STANDARD LIBRARY ---
-    try:
-        content = [msg]
-        if media_bytes and media_mime:
-            content.append({'mime_type': media_mime, 'data': media_bytes})
-        
-        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
-        response = model.generate_content(content)
-        return response.text.strip()
-    
-    except Exception as e:
-        print(f"⚠️ SDK Failed ({e}). Switching to Direct HTTP...")
+    # 2. PRIORITY LIST (Put 2.0 First)
+    models_to_try = [
+        "gemini-2.0-flash-exp",  # <--- YOUR PREFERENCE
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
 
-    # --- METHOD B: DIRECT HTTP FALLBACK (The Nuclear Option) ---
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={clean_key}"
-        
-        # Simple text payload (Complex media omitted in fallback for stability)
-        payload = {
-            "contents": [{
-                "parts": [{"text": f"{system_instruction}\n\nUser: {msg}"}]
-            }]
-        }
-        
-        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-        data = response.json()
-        
-        # Extract text from raw JSON
-        if "candidates" in data and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        else:
-            print(f"❌ API Error: {data}")
-            return "My connection is fuzzy, but I'm here."
+    # 3. The Loop
+    for model_name in models_to_try:
+        # --- ATTEMPT A: SDK ---
+        try:
+            content = [msg]
+            if media_bytes and media_mime:
+                content.append({'mime_type': media_mime, 'data': media_bytes})
+            
+            model = genai.GenerativeModel(model_name)
+            # Safe call handling
+            if "1.5" in model_name or "2.0" in model_name:
+                # Newer models support system_instruction in init, but we use full_prompt to be safe across versions
+                response = model.generate_content(content if media_bytes else full_prompt)
+            else:
+                response = model.generate_content(full_prompt)
+            
+            if response.text:
+                return response.text.strip()
+        except Exception:
+            pass # Silently fail and try HTTP
 
-    except Exception as e2:
-        print(f"❌ ALL AI METHODS FAILED: {e2}")
-        return "I'm listening, but the stars are silent right now. I've saved your entry."
+        # --- ATTEMPT B: DIRECT HTTP ---
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+            payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
+            
+            response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+            data = response.json()
+            
+            if "candidates" in data and len(data["candidates"]) > 0:
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            
+        except Exception:
+            pass # Fail and try next model
+
+    # 4. Total Failure Fallback
+    print("❌ ALL AI MODELS FAILED. Check API Key permissions.")
+    return "I'm listening, but the stars are silent right now. I've saved your entry."
 
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
     try:
-        # We also wrap embedding in a try/catch to prevent crashes
+        # Wrap embedding in try/catch to prevent crashes
         result = genai.embed_content(model="models/text-embedding-004", content=query_text)
         query_vector = result['embedding']
         pipeline = [
@@ -172,7 +185,7 @@ def process():
             (mode == 'rant'), past_memories
         )
 
-        # --- INSTANT SUMMARY GENERATION (Fixes "Processing..." forever) ---
+        # Instant Summary (No "Processing...")
         instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
 
         # Database Save
