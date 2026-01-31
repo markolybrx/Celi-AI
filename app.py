@@ -4,18 +4,35 @@ import traceback
 import uuid
 import json
 import time
-import requests
+from datetime import datetime
 from bson.objectid import ObjectId
 from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for, session, Response
 from flask_session import Session
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
-import google.generativeai as genai
 
-import database as db
+# --- SAFE IMPORTS ---
+try:
+    import requests
+except ImportError:
+    requests = None
+    print("⚠️ WARNING: 'requests' library not found. HTTP Fallback disabled.")
 
-# --- SAFETY IMPORT BLOCK ---
-# We define these as None first. If the import fails, the app WON'T crash when checking them.
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+    print("⚠️ WARNING: 'google.generativeai' library not found. AI disabled.")
+
+# --- DATABASE IMPORT WITH SAFETY CHECK ---
+try:
+    import database as db
+    if db.users_col is None:
+        print("❌ CRITICAL: Database collections are None. Check DB Connection.")
+except Exception as e:
+    print(f"❌ CRITICAL: Database import failed: {e}")
+    db = None
+
+# --- TASKS IMPORT ---
 process_entry_analysis = None
 generate_constellation_name_task = None
 generate_weekly_insight = None
@@ -28,31 +45,47 @@ try:
         generate_weekly_insight, 
         generate_daily_trivia_task
     )
-except ImportError as e:
-    print(f"⚠️  Warning: Tasks module failed to load. Background jobs disabled. Error: {e}")
+except ImportError:
+    print("⚠️ Warning: Tasks module failed to load.")
+except Exception as e:
+    print(f"⚠️ Warning: Error importing tasks: {e}")
 
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'celi_super_secret_key_999')
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'celi_fallback_key_12345')
 app.config['SESSION_TYPE'] = 'redis'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_REDIS'] = db.redis_client 
-server_session = Session(app)
 
-# --- AI CONFIGURATION ---
+# --- SAFE SESSION INIT ---
+# If Redis fails, we fall back to filesystem or cookie to prevent 500 Error
+if db and db.redis_client:
+    app.config['SESSION_REDIS'] = db.redis_client
+    try:
+        server_session = Session(app)
+    except Exception as e:
+        print(f"⚠️ Redis Session Failed: {e}. Falling back to default.")
+        app.config['SESSION_TYPE'] = 'filesystem'
+        Session(app)
+else:
+    print("⚠️ No Redis Client. Using filesystem session.")
+    app.config['SESSION_TYPE'] = 'filesystem'
+    Session(app)
+
+# --- AI CONFIG ---
 api_key = os.environ.get("GEMINI_API_KEY")
 clean_key = ""
 CACHED_MODEL_NAME = None
 
-if not api_key:
-    print("❌ CRITICAL: GEMINI_API_KEY is missing!")
-else:
+if api_key and genai:
     clean_key = api_key.strip().replace("'", "").replace('"', "").replace("\n", "").replace("\r", "")
-    genai.configure(api_key=clean_key)
-    print(f"✅ AI Core Online. Key ID: ...{clean_key[-4:]}")
+    try:
+        genai.configure(api_key=clean_key)
+        print(f"✅ AI Core Online.")
+    except Exception as e:
+        print(f"❌ AI Config Failed: {e}")
 
 def serialize_doc(doc):
     if not doc: return None
@@ -64,20 +97,19 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (AUTO-DISCOVERY)
+#           ROBUST AI ENGINE
 # ==================================================
 def get_valid_model_name():
     global CACHED_MODEL_NAME
     if CACHED_MODEL_NAME: return CACHED_MODEL_NAME
+    if not requests: return "gemini-pro"
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=5)
         data = response.json()
         
-        if "error" in data:
-            print(f"❌ API Key Error: {data['error']['message']}")
-            return None
+        if "error" in data: return None
 
         preferred_order = ["gemini-2.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
         available_models = [m['name'].replace("models/", "") for m in data.get('models', []) if 'generateContent' in m['supportedGenerationMethods']]
@@ -85,7 +117,6 @@ def get_valid_model_name():
         for pref in preferred_order:
             if pref in available_models:
                 CACHED_MODEL_NAME = pref
-                print(f"🔹 Model Cached: {pref}")
                 return pref
         
         if available_models:
@@ -93,13 +124,12 @@ def get_valid_model_name():
             return available_models[0]
             
         return None
-    except Exception as e:
-        print(f"⚠️ Model Discovery Failed: {e}")
-        return "gemini-pro"
+    except: return "gemini-pro"
 
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
-    model_name = get_valid_model_name()
-    if not model_name: return "Critical Error: API Key invalid."
+    if not clean_key: return "Configuration Error: API Key missing."
+    
+    model_name = get_valid_model_name() or "gemini-pro"
 
     memory_block = ""
     if context_memories:
@@ -109,44 +139,63 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
     system_instruction = role + memory_block
     full_prompt = f"{system_instruction}\n\nUser: {msg}"
 
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
-        payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
-        response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-        data = response.json()
-        
-        if "candidates" in data and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        else:
-            return "I'm listening, but the connection is faint."
-    except Exception as e:
-        print(f"❌ Request Failed: {e}")
-        return "Signal Lost. Please try again."
+    if requests:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+            payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
+            response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+            data = response.json()
+            if "candidates" in data and len(data["candidates"]) > 0:
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except: pass
+    
+    return "I'm listening, but the connection is faint."
 
 def find_similar_memories_sync(user_id, query_text):
-    if not query_text or db.history_col is None: return []
-    try:
-        return [] # Fallback for stability
-    except: return []
+    return []
 
 # ==================================================
-#                 ROUTES
+#                 ROUTES (CRASH PROOF)
 # ==================================================
 
 @app.route('/')
 def index():
-    if 'user_id' not in session: return redirect(url_for('login_page'))
-    return render_template('index.html')
+    try:
+        if 'user_id' not in session: return redirect(url_for('login_page'))
+        return render_template('index.html')
+    except Exception as e:
+        traceback.print_exc()
+        return f"CRITICAL ERROR IN INDEX: {e}", 500
 
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
-    if request.method == 'GET': return redirect(url_for('index')) if 'user_id' in session else render_template('auth.html')
-    username, password = request.form.get('username'), request.form.get('password')
-    user = db.users_col.find_one({"username": username})
-    if user and check_password_hash(user['password_hash'], password):
-        session['user_id'] = user['user_id']
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error", "error": "Invalid Credentials"}), 401
+    try:
+        if request.method == 'GET': 
+            return redirect(url_for('index')) if 'user_id' in session else render_template('auth.html')
+        
+        # POST LOGIC
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        # 1. DB Safety Check
+        if db is None or db.users_col is None:
+            return jsonify({"status": "error", "error": "Database Disconnected"}), 500
+
+        user = db.users_col.find_one({"username": username})
+        
+        if user and check_password_hash(user['password_hash'], password):
+            try:
+                session['user_id'] = user['user_id']
+                return jsonify({"status": "success"})
+            except Exception as se:
+                print(f"❌ Session Write Failed: {se}")
+                return jsonify({"status": "error", "error": "Session/Redis Failure"}), 500
+        else:
+            return jsonify({"status": "error", "error": "Invalid Credentials"}), 401
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "error": f"Login Crash: {str(e)}"}), 500
 
 @app.route('/logout')
 def logout(): session.clear(); return redirect(url_for('login_page'))
@@ -162,16 +211,13 @@ def process():
         timestamp = str(datetime.now().timestamp())
 
         media_id, audio_id = None, None
-        image_bytes = None
         if image_file and db.fs:
             media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype)
-            image_bytes = db.fs.get(media_id).read()
         if audio_file and db.fs:
             audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype)
 
-        past_memories = [] 
         reward_result = process_daily_rewards(db.users_col, session['user_id'], msg)
-        reply = generate_immediate_reply(msg, image_bytes, image_file.mimetype if image_file else None, (mode == 'rant'), past_memories)
+        reply = generate_immediate_reply(msg, None, None, (mode == 'rant'), [])
         
         instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
 
@@ -182,7 +228,6 @@ def process():
             "constellation_name": None, "is_valid_star": reward_result['awarded'], "embedding": None
         })
 
-        # SAFE TASK EXECUTION
         if process_entry_analysis:
             try: process_entry_analysis.delay(timestamp, msg, session['user_id'])
             except: pass
@@ -217,12 +262,11 @@ def get_data():
     history_cursor = db.history_col.find({"user_id": session['user_id']}, {"full_message": 0, "ai_analysis": 0, "embedding": 0}).sort("timestamp", 1)
     loaded_history = {doc['timestamp']: serialize_doc(doc) for doc in history_cursor}
 
-    # TRIVIA CHECK WITH SAFETY
     today_str = datetime.now().strftime("%Y-%m-%d")
     current_trivia = user.get("daily_trivia", {})
     
     if current_trivia.get("date") != today_str:
-        if generate_daily_trivia_task: # CHECK IF TASK EXISTS BEFORE CALLING
+        if generate_daily_trivia_task: 
             try:
                 generate_daily_trivia_task.delay(session['user_id'])
                 daily_trivia = {"fact": "Scouring the universe...", "loading": True}
