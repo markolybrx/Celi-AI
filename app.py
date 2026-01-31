@@ -30,7 +30,7 @@ if api_key:
     clean_key = api_key.strip().replace("'", "").replace('"', "").replace("\n", "").replace("\r", "")
     genai.configure(api_key=clean_key)
 
-# --- TASKS IMPORT (Simple & Safe) ---
+# --- TASKS IMPORT ---
 try:
     from tasks import process_entry_analysis, generate_weekly_insight, generate_daily_trivia_task
 except ImportError:
@@ -48,7 +48,7 @@ def serialize_doc(doc):
         if isinstance(v, ObjectId): doc[k] = str(v)
     return doc
 
-# --- AI ENGINE (Keeps Gemini 2.5 Working) ---
+# --- AI ENGINE ---
 def get_valid_model_name():
     global CACHED_MODEL_NAME
     if CACHED_MODEL_NAME: return CACHED_MODEL_NAME
@@ -108,20 +108,15 @@ def process():
     mode = request.form.get('mode', 'journal')
     timestamp = str(datetime.now().timestamp())
     
-    # 1. Generate Reply
     reply = generate_immediate_reply(msg)
-    
-    # 2. Check Rewards
     reward_result = process_daily_rewards(db.users_col, session['user_id'], msg)
     
-    # 3. Save to DB
     db.history_col.insert_one({
         "user_id": session['user_id'], "timestamp": timestamp, "date": datetime.now().strftime("%Y-%m-%d"),
         "summary": (msg[:60] + "...") if len(msg) > 60 else msg, 
         "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode
     })
 
-    # 4. Background Tasks
     if process_entry_analysis: 
         try: process_entry_analysis.delay(timestamp, msg, session['user_id'])
         except: pass
@@ -160,7 +155,7 @@ def get_data():
         "daily_trivia": user.get("daily_trivia", {"fact": "Loading...", "loading": True})
     })
 
-# --- REQUIRED SUPPORT ROUTES ---
+# --- SUPPORT ROUTES ---
 @app.route('/api/galaxy_map')
 def galaxy_map(): return jsonify([]) 
 
