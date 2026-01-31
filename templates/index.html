@@ -32,9 +32,10 @@
     {% include 'components/dock.html' %}
     {% include 'components/fabs.html' %}
 
-    {% include 'components/modals/profile.html' %}  
     {% include 'components/modals/archive_modal.html' %}
-    {% include 'components/modals/chat.html' %} 
+    {% include 'components/modals/profile.html' %}
+    {% include 'components/modals/chat.html' %}
+    {% include 'components/modals/rank_tree.html' %} 
     
     <script src="{{ url_for('static', filename='js/data.js') }}"></script>
     <script src="{{ url_for('static', filename='js/ui.js') }}"></script>
