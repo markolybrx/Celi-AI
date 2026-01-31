@@ -30,13 +30,11 @@ if api_key:
     clean_key = api_key.strip().replace("'", "").replace('"', "").replace("\n", "").replace("\r", "")
     genai.configure(api_key=clean_key)
 
-# --- TASKS IMPORT ---
-# We use a simple try/except here just to prevent a total crash if Redis is slow
+# --- TASKS IMPORT (Simple & Safe) ---
 try:
     from tasks import process_entry_analysis, generate_weekly_insight, generate_daily_trivia_task
 except ImportError:
     process_entry_analysis = None
-    print("⚠️ Background tasks disabled.")
 
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
@@ -50,25 +48,22 @@ def serialize_doc(doc):
         if isinstance(v, ObjectId): doc[k] = str(v)
     return doc
 
-# --- AI ENGINE (The ONE thing we keep: Auto-Discovery) ---
+# --- AI ENGINE (Keeps Gemini 2.5 Working) ---
 def get_valid_model_name():
     global CACHED_MODEL_NAME
     if CACHED_MODEL_NAME: return CACHED_MODEL_NAME
 
     try:
-        # Ask Google what models are available
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
         response = requests.get(url, timeout=5)
         data = response.json()
         
-        # Priority List: 2.5 -> 2.0 -> 1.5 -> Pro
         preferred_order = ["gemini-2.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
         available_models = [m['name'].replace("models/", "") for m in data.get('models', []) if 'generateContent' in m['supportedGenerationMethods']]
         
         for pref in preferred_order:
             if pref in available_models:
                 CACHED_MODEL_NAME = pref
-                print(f"🔹 Celi linked to: {pref}")
                 return pref
         
         return "gemini-pro"
@@ -82,8 +77,7 @@ def generate_immediate_reply(msg):
         response = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=8)
         data = response.json()
         if "candidates" in data: return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as e:
-        print(f"AI Error: {e}")
+    except: pass
     return "I'm listening, but the connection is faint."
 
 # --- ROUTES ---
@@ -97,11 +91,8 @@ def index():
 def login_page():
     if request.method == 'GET': return redirect(url_for('index')) if 'user_id' in session else render_template('auth.html')
     
-    username = request.form.get('username')
-    password = request.form.get('password')
-    
-    user = db.users_col.find_one({"username": username})
-    if user and check_password_hash(user['password_hash'], password):
+    user = db.users_col.find_one({"username": request.form.get('username')})
+    if user and check_password_hash(user['password_hash'], request.form.get('password')):
         session['user_id'] = user['user_id']
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "error": "Invalid Credentials"}), 401
