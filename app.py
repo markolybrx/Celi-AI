@@ -14,11 +14,22 @@ import google.generativeai as genai
 
 import database as db
 
-# --- SAFETY IMPORT FOR TASKS ---
+# --- SAFETY IMPORT BLOCK ---
+# We define these as None first. If the import fails, the app WON'T crash when checking them.
+process_entry_analysis = None
+generate_constellation_name_task = None
+generate_weekly_insight = None
+generate_daily_trivia_task = None
+
 try:
-    from tasks import process_entry_analysis, generate_constellation_name_task, generate_weekly_insight, generate_daily_trivia_task
-except ImportError:
-    print("⚠️  Warning: Tasks module not found. Background jobs disabled.")
+    from tasks import (
+        process_entry_analysis, 
+        generate_constellation_name_task, 
+        generate_weekly_insight, 
+        generate_daily_trivia_task
+    )
+except ImportError as e:
+    print(f"⚠️  Warning: Tasks module failed to load. Background jobs disabled. Error: {e}")
 
 from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
 
@@ -34,13 +45,11 @@ server_session = Session(app)
 # --- AI CONFIGURATION ---
 api_key = os.environ.get("GEMINI_API_KEY")
 clean_key = ""
-# Global variable to cache the working model so we don't scan every time
-CACHED_MODEL_NAME = None 
+CACHED_MODEL_NAME = None
 
 if not api_key:
     print("❌ CRITICAL: GEMINI_API_KEY is missing!")
 else:
-    # CLEAN THE KEY
     clean_key = api_key.strip().replace("'", "").replace('"', "").replace("\n", "").replace("\r", "")
     genai.configure(api_key=clean_key)
     print(f"✅ AI Core Online. Key ID: ...{clean_key[-4:]}")
@@ -55,18 +64,11 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (AUTO-DISCOVERY PROTOCOL)
+#           AI ENGINE (AUTO-DISCOVERY)
 # ==================================================
 def get_valid_model_name():
-    """
-    Asks Google for a list of available models and returns the first one that works.
-    Uses caching to speed up subsequent requests.
-    """
     global CACHED_MODEL_NAME
-    
-    # 1. Return cached model if we already found one
-    if CACHED_MODEL_NAME:
-        return CACHED_MODEL_NAME
+    if CACHED_MODEL_NAME: return CACHED_MODEL_NAME
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
@@ -77,26 +79,15 @@ def get_valid_model_name():
             print(f"❌ API Key Error: {data['error']['message']}")
             return None
 
-        # Look for the best model
-        # We explicitly add the one that worked for you (gemini-2.5-flash) to the top priority
-        preferred_order = [
-            "gemini-2.5-flash", 
-            "gemini-2.0-flash-exp", 
-            "gemini-1.5-flash", 
-            "gemini-1.5-pro", 
-            "gemini-pro"
-        ]
-        
+        preferred_order = ["gemini-2.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
         available_models = [m['name'].replace("models/", "") for m in data.get('models', []) if 'generateContent' in m['supportedGenerationMethods']]
         
-        # 2. Check if any preferred model is available
         for pref in preferred_order:
             if pref in available_models:
-                CACHED_MODEL_NAME = pref # Cache it!
-                print(f"🔹 Model Discovered & Cached: {pref}")
+                CACHED_MODEL_NAME = pref
+                print(f"🔹 Model Cached: {pref}")
                 return pref
         
-        # 3. Fallback: Use the very first available model
         if available_models:
             CACHED_MODEL_NAME = available_models[0]
             return available_models[0]
@@ -104,18 +95,12 @@ def get_valid_model_name():
         return None
     except Exception as e:
         print(f"⚠️ Model Discovery Failed: {e}")
-        return "gemini-pro" # Blind fallback
+        return "gemini-pro"
 
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
-    """
-    Uses the discovered model to generate a reply.
-    """
-    # 1. DISCOVER MODEL (Or use Cached)
     model_name = get_valid_model_name()
-    if not model_name:
-        return "Critical Error: Your API Key cannot access any Google AI models. Please check your billing/quota."
+    if not model_name: return "Critical Error: API Key invalid."
 
-    # 2. PREPARE PROMPT
     memory_block = ""
     if context_memories:
         memory_block = "\n\nRELEVANT PAST:\n" + "\n".join([f"- {m['date']}: {m['full_message']}" for m in context_memories])
@@ -124,20 +109,16 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
     system_instruction = role + memory_block
     full_prompt = f"{system_instruction}\n\nUser: {msg}"
 
-    # 3. EXECUTE (DIRECT HTTP)
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
         payload = { "contents": [{ "parts": [{"text": full_prompt}] }] }
-        
         response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
         data = response.json()
         
         if "candidates" in data and len(data["candidates"]) > 0:
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         else:
-            print(f"❌ Generation Failed: {data}")
             return "I'm listening, but the connection is faint."
-
     except Exception as e:
         print(f"❌ Request Failed: {e}")
         return "Signal Lost. Please try again."
@@ -145,8 +126,7 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
 def find_similar_memories_sync(user_id, query_text):
     if not query_text or db.history_col is None: return []
     try:
-        # Simple fallback embedding if library fails
-        return [] 
+        return [] # Fallback for stability
     except: return []
 
 # ==================================================
@@ -181,41 +161,34 @@ def process():
         audio_file = request.files.get('audio')
         timestamp = str(datetime.now().timestamp())
 
-        # Media Handling
-        media_id, audio_id, image_bytes = None, None, None
+        media_id, audio_id = None, None
+        image_bytes = None
         if image_file and db.fs:
             media_id = db.fs.put(image_file.read(), filename=f"img_{timestamp}", content_type=image_file.mimetype)
             image_bytes = db.fs.get(media_id).read()
         if audio_file and db.fs:
             audio_id = db.fs.put(audio_file, filename=f"aud_{timestamp}", content_type=audio_file.mimetype)
 
-        # AI Processing
-        past_memories = [] # Disabled memory temporarily for stability
+        past_memories = [] 
         reward_result = process_daily_rewards(db.users_col, session['user_id'], msg)
+        reply = generate_immediate_reply(msg, image_bytes, image_file.mimetype if image_file else None, (mode == 'rant'), past_memories)
         
-        reply = generate_immediate_reply(
-            msg, image_bytes, image_file.mimetype if image_file else None, 
-            (mode == 'rant'), past_memories
-        )
-
-        # --- INSTANT SUMMARY GENERATION ---
-        # Fixed: Calculate summary HERE instead of waiting for background task
         instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
 
-        # Database Save
         db.history_col.insert_one({
             "user_id": session['user_id'], "timestamp": timestamp, "date": datetime.now().strftime("%Y-%m-%d"),
-            "summary": instant_summary,  # Saving the instant summary
-            "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode,
+            "summary": instant_summary, "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode,
             "has_media": bool(media_id), "media_file_id": media_id, "has_audio": bool(audio_id), "audio_file_id": audio_id,
             "constellation_name": None, "is_valid_star": reward_result['awarded'], "embedding": None
         })
 
-        # Background Tasks (Silent Fail)
-        try:
-            process_entry_analysis.delay(timestamp, msg, session['user_id'])
-            generate_weekly_insight.delay(session['user_id'])
-        except: pass
+        # SAFE TASK EXECUTION
+        if process_entry_analysis:
+            try: process_entry_analysis.delay(timestamp, msg, session['user_id'])
+            except: pass
+        if generate_weekly_insight:
+            try: generate_weekly_insight.delay(session['user_id'])
+            except: pass
 
         command, system_msg = None, ""
         if update_rank_check(db.users_col, session['user_id']) == "level_up":
@@ -241,21 +214,22 @@ def get_data():
     max_dust = rank_info['req']
     current_dust = user.get('stardust', 0)
 
-    # Lightweight History (Fast Load)
-    history_cursor = db.history_col.find(
-        {"user_id": session['user_id']}, 
-        {"full_message": 0, "ai_analysis": 0, "embedding": 0}
-    ).sort("timestamp", 1)
-    
+    history_cursor = db.history_col.find({"user_id": session['user_id']}, {"full_message": 0, "ai_analysis": 0, "embedding": 0}).sort("timestamp", 1)
     loaded_history = {doc['timestamp']: serialize_doc(doc) for doc in history_cursor}
 
+    # TRIVIA CHECK WITH SAFETY
     today_str = datetime.now().strftime("%Y-%m-%d")
     current_trivia = user.get("daily_trivia", {})
+    
     if current_trivia.get("date") != today_str:
-        try:
-            generate_daily_trivia_task.delay(session['user_id'])
-            daily_trivia = {"fact": "Scouring the universe...", "loading": True}
-        except: daily_trivia = {"fact": "Archive offline.", "loading": False}
+        if generate_daily_trivia_task: # CHECK IF TASK EXISTS BEFORE CALLING
+            try:
+                generate_daily_trivia_task.delay(session['user_id'])
+                daily_trivia = {"fact": "Scouring the universe...", "loading": True}
+            except: 
+                daily_trivia = {"fact": "Archive offline (Task Error).", "loading": False}
+        else:
+            daily_trivia = {"fact": "Archive offline (Import Error).", "loading": False}
     else:
         daily_trivia = current_trivia
 
