@@ -45,12 +45,11 @@
     
     {% include 'components/fabs.html' %}
 
+    {% include 'components/modals/profile.html' %}  
     {% include 'components/modals/archive_modal.html' %}
-    {% include 'components/modals/settings_modal.html' %}
     {% include 'components/modals/chat_modal.html' %}
     
     <script>
-        // Pass rank data to JS
         const SQ_MAP = {
             "q1": "What was the name of your first pet?",
             "q2": "What city were you born in?",
@@ -64,7 +63,6 @@
     <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
     
     <script>
-        // Init
         document.addEventListener('DOMContentLoaded', () => {
             loadData();
             if('serviceWorker' in navigator) {
