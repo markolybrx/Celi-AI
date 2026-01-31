@@ -39,14 +39,7 @@ if not api_key:
 else:
     clean_key = api_key.strip().replace("'", "").replace('"', "")
     genai.configure(api_key=clean_key)
-    print("✅ AI Core Online. Validating models...")
-    try:
-        # Diagnostic: Print available models to logs to debug 404 errors
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(f"   - Available: {m.name}")
-    except Exception as e:
-        print(f"⚠️ Could not list models: {e}")
+    print("✅ AI Core Online")
 
 # ==================================================
 #           HELPER: JSON SERIALIZER
@@ -61,11 +54,12 @@ def serialize_doc(doc):
     return doc
 
 # ==================================================
-#           AI ENGINE (STABLE 1.5)
+#           AI ENGINE
 # ==================================================
 def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
     """
-    Generates chat response using the STABLE Gemini 1.5 Flash model.
+    Generates chat response. Includes a fallback to standard 'gemini-pro' 
+    if 'flash' fails due to old libraries.
     """
     try:
         # Construct Context
@@ -80,11 +74,19 @@ def generate_immediate_reply(msg, media_bytes=None, media_mime=None, is_void=Fal
         if media_bytes and media_mime:
             content.append({'mime_type': media_mime, 'data': media_bytes})
 
-        # MODEL SELECTION: 1.5 Flash is the current stable standard.
-        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
-        
-        response = model.generate_content(content)
-        return response.text.strip()
+        # ATTEMPT 1: Modern Flash Model
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
+            response = model.generate_content(content)
+            return response.text.strip()
+        except Exception:
+            # ATTEMPT 2: Fallback to Legacy Model (Safeguard for old libraries)
+            print("⚠️ 1.5 Flash failed, trying gemini-pro")
+            model = genai.GenerativeModel("gemini-pro")
+            # Gemini-Pro doesn't take system_instruction in init, so we prepend it
+            full_prompt = f"{system_instruction}\n\nUser: {msg}"
+            response = model.generate_content(full_prompt)
+            return response.text.strip()
 
     except Exception as e:
         print(f"❌ AI GENERATION ERROR: {e}")
@@ -154,15 +156,21 @@ def process():
             (mode == 'rant'), past_memories
         )
 
+        # --- FIX: INSTANT SUMMARY GENERATION ---
+        # Instead of "Processing...", we create a snippet immediately.
+        # This prevents the UI from getting stuck if background tasks fail.
+        instant_summary = (msg[:60] + "...") if len(msg) > 60 else msg
+
         # Database Save
         db.history_col.insert_one({
             "user_id": session['user_id'], "timestamp": timestamp, "date": datetime.now().strftime("%Y-%m-%d"),
-            "summary": "Processing...", "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode,
+            "summary": instant_summary, # <--- FIXED
+            "full_message": msg, "reply": reply, "ai_analysis": None, "mode": mode,
             "has_media": bool(media_id), "media_file_id": media_id, "has_audio": bool(audio_id), "audio_file_id": audio_id,
             "constellation_name": None, "is_valid_star": reward_result['awarded'], "embedding": None
         })
 
-        # Background Tasks
+        # Background Tasks (Wrapped in Try/Catch so they don't crash chat)
         try:
             process_entry_analysis.delay(timestamp, msg, session['user_id'])
             generate_weekly_insight.delay(session['user_id'])
@@ -237,6 +245,16 @@ def get_data():
         "weekly_insight": user.get("weekly_insight", None),
         "daily_trivia": daily_trivia
     })
+
+# --- DEBUG ROUTE TO TEST AI ---
+@app.route('/debug_ai')
+def debug_ai():
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content("Hello")
+        return f"AI Connection Successful! Response: {response.text}"
+    except Exception as e:
+        return f"AI Failed: {str(e)}"
 
 # --- SUPPORTING ROUTES ---
 @app.route('/api/galaxy_map')
