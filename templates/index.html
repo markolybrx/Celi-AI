@@ -1,64 +1,76 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
-    <link rel="manifest" href="/manifest.json">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Celi: AI Journal</title>
-    
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0f172a">
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <link rel="stylesheet" href="/static/css/base.css">
-    <link rel="stylesheet" href="/static/css/layout.css">
-    <link rel="stylesheet" href="/static/css/components.css">
-    <link rel="stylesheet" href="/static/css/ranks.css">
-    <link rel="stylesheet" href="/static/css/chat.css">
-    <link rel="stylesheet" href="/static/css/animations.css">
-    
-    <script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js'))}</script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body>
+<body class="bg-gray-900 text-gray-100 font-sans antialiased overflow-hidden selection:bg-indigo-500 selection:text-white">
 
-    <canvas id="starfield"></canvas>
-    <div id="void-vignette"></div>
-    <div id="static-background"></div>
-
-    {% include 'components/header.html' %}
-
-           <div id="main-view">
-        {% include 'components/dashboard_card.html' %}
-        {% include 'components/calendar.html' %}
-        {% include 'components/echo.html' %}
-        {% include 'components/trivia_card.html' %} 
+    <div class="fixed inset-0 z-0 pointer-events-none">
+        <div class="absolute inset-0 bg-[url('/static/img/noise.png')] opacity-[0.03] mix-blend-overlay"></div>
+        <div class="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-indigo-900/20 to-transparent"></div>
+        <div class="absolute bottom-0 right-0 w-96 h-96 bg-purple-900/10 rounded-full blur-3xl translate-y-1/2 translate-x-1/2"></div>
     </div>
 
-    {% include 'components/dock.html' %}
-    {% include 'components/fabs.html' %} ```
+    <div id="main-view" class="relative z-10 h-screen overflow-y-auto pb-32 no-scrollbar">
+        <div class="container mx-auto px-4 pt-6 max-w-md">
+            
+            {% include 'components/dashboard_card.html' %}
+            
+            {% include 'components/calendar.html' %}
+            
+            {% include 'components/echo.html' %} 
 
-    {% include 'components/galaxy_btn.html' %}
+            <div class="flex items-center gap-4 my-8 px-2 opacity-40">
+                <div class="h-px bg-gradient-to-r from-transparent via-indigo-400 to-transparent flex-1"></div>
+                <div class="p-1 rounded-full border border-indigo-400/30">
+                    <div class="w-1 h-1 bg-indigo-400 rounded-full"></div>
+                </div>
+                <div class="h-px bg-gradient-to-r from-transparent via-indigo-400 to-transparent flex-1"></div>
+            </div>
+            
+            {% include 'components/trivia_card.html' %} 
+            
+            <div class="h-24"></div>
+        </div>
+    </div>
+    
     {% include 'components/dock.html' %}
+    
     {% include 'components/fabs.html' %}
 
-    {% include 'components/modals/chat.html' %}
-    {% include 'components/modals/rank_tree.html' %}
-    {% include 'components/modals/archive.html' %}
-    {% include 'components/modals/profile.html' %}
-    {% include 'components/modals/edit_info.html' %}
-    {% include 'components/modals/auth_actions.html' %}
-    {% include 'components/modals/status.html' %}
-    {% include 'components/modals/policy.html' %}
-
-    <script src="/static/js/core.js"></script>
-    <script src="/static/js/galaxy.js"></script>
-    <script src="/static/js/data.js"></script>
-    <script src="/static/js/ranks.js"></script>
-    <script src="/static/js/chat.js"></script>
+    {% include 'components/modals/archive_modal.html' %}
+    {% include 'components/modals/settings_modal.html' %}
+    {% include 'components/modals/chat_modal.html' %}
     
     <script>
-        window.onload = async () => {
-            await loadData();
-            if (typeof triggerAiSignal === "function") triggerAiSignal();
+        // Pass rank data to JS
+        const SQ_MAP = {
+            "q1": "What was the name of your first pet?",
+            "q2": "What city were you born in?",
+            "q3": "What is your mother's maiden name?",
+            "q4": "What was the model of your first car?",
+            "q5": "What is your favorite book?"
         };
+    </script>
+    <script src="{{ url_for('static', filename='js/data.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+    
+    <script>
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            loadData();
+            if('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('/sw.js');
+            }
+        });
     </script>
 </body>
 </html>
