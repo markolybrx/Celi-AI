@@ -7,3 +7,4 @@ gunicorn
 google-generativeai>=0.8.3
 pillow
 celery
+requests
