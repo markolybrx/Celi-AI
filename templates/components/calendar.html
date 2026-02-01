@@ -1,0 +1,35 @@
+<div class="calendar-card relative overflow-hidden">
+    <div class="cal-header">
+        <button class="cal-btn" onclick="changeMonth(-1)">‹</button>
+        
+        <div id="cal-month-year" class="cal-title cursor-pointer hover:opacity-80 transition-opacity" onclick="toggleDatePicker()">Loading...</div>
+        
+        <div class="cal-right-controls">
+            <button id="cal-today-btn" class="cal-today-btn hidden" onclick="goToToday()" title="Return to Today">⟲</button>
+            <button class="cal-btn" onclick="changeMonth(1)">›</button>
+        </div>
+    </div>
+
+    <div id="cal-picker" class="cal-picker">
+        <div class="picker-header-row">
+            <div class="picker-year-header-btn" onclick="toggleYearMode()">
+                <span id="picker-year-text" class="text-xl font-black tracking-wide">2026</span>
+                <svg class="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+            </div>
+
+            <button class="picker-close-btn" onclick="toggleDatePicker()">✕</button>
+        </div>
+
+        <div id="picker-months-container" class="picker-grid active">
+            </div>
+
+        <div id="picker-years-container" class="picker-grid hidden">
+            </div>
+
+        <div class="picker-actions">
+            <button class="picker-action-btn confirm" onclick="confirmDateSelection()">Confirm Update</button>
+        </div>
+    </div>
+
+    <div class="cal-grid" id="cal-grid"></div>
+</div>
