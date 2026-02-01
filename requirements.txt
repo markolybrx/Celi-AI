@@ -1,0 +1,11 @@
+Flask
+gunicorn
+gevent
+google-generativeai>=0.8.3
+pymongo[srv]
+dnspython
+certifi
+redis
+celery
+flask-session
+werkzeug
