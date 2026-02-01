@@ -1,0 +1,29 @@
+<div id="ranks-modal" class="modal-overlay" onclick="if(event.target.id==='ranks-modal') closeModal('ranks-modal')">
+    <div class="relative w-full max-w-[400px] flex flex-col items-center h-[calc(85vh-40px)]">
+        <div class="modal-card-fixed shadow-2xl">
+            <div class="modal-header-fixed">
+                <div class="flex items-center gap-4 mb-3">
+                    <div id="modal-rank-icon" class="rank-circle"></div>
+                    <div class="flex-1 min-w-0">
+                        <h2 id="modal-rank-name" class="text-xl font-bold tracking-wide leading-tight truncate">...</h2>
+                        <div id="modal-psyche-display" class="text-[10px] text-[var(--mood)] font-bold uppercase tracking-widest mt-1">...</div>
+                    </div>
+                </div>
+                <div class="w-full relative mt-1 mb-3">
+                    <div class="flex justify-between items-end mb-1">
+                        <span class="text-[9px] opacity-50 uppercase tracking-wider">Progress</span>
+                        <span id="modal-sd-text" class="text-[9px] font-mono text-theme-muted font-bold">0/0 Stardust</span>
+                    </div>
+                    <div class="progress-bg">
+                        <div id="modal-progress-bar" class="progress-bar"></div>
+                    </div>
+                </div>
+                <div class="modal-synth-box">
+                    <div id="modal-synth-text" class="modal-synth-text">Loading analysis...</div>
+                </div>
+            </div>
+            <div id="ranks-list-container" class="tree-container"></div>
+        </div>
+        <div class="floating-close-btn" onclick="closeModal('ranks-modal')">✕</div>
+    </div>
+</div>
