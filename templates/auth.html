@@ -6,6 +6,13 @@
     <title>Celi: Access</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>if(window.navigator&&navigator.serviceWorker){navigator.serviceWorker.getRegistrations().then(r=>{for(let reg of r)reg.unregister()})}</script>
+    
+    <!-- Vercel Web Analytics -->
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
+    
     <style>
         :root { --mood: #00f2fe; }
         body { background: #000; color: #fff; font-family: 'Inter', sans-serif; overflow: hidden; height: 100vh; display: flex; align-items: center; justify-content: center; position: relative; }
