@@ -371,15 +371,28 @@ def process_message():
 @app.route('/api/get_user_data')
 def get_user_data():
     if 'user_id' not in session: return jsonify({"error": "No User"}), 401
+    
     user = users_col.find_one({"user_id": session['user_id']}, {"_id": 0, "password_hash": 0})
     if not user: return jsonify({"error": "User missing"}), 404
     
-    # Calculate next level info
-    rank_name, star_type, next_threshold = get_rank_meta(user.get('xp', 0))
+    # --- FIX START: Align with new Rank System ---
+    # The new system uses 'rank_index' to determine current rank
+    current_index = user.get('rank_index', 0)
     
-    user['next_level_xp'] = next_threshold
+    # Get metadata from rank_system.py
+    # We pass the INDEX, not the XP/Stardust
+    rank_name, star_type, next_threshold = get_rank_meta(current_index)
+    
+    # Send standardized data to frontend
+    user['rank'] = rank_name
     user['star_type'] = star_type
+    user['next_level_xp'] = next_threshold
+    # Ensure stardust is sent (frontend expects it)
+    user['stardust'] = user.get('stardust', 0)
+    # --- FIX END ---
+
     return jsonify(user)
+
 
 @app.route('/api/get_history')
 def get_history():
