@@ -54,13 +54,19 @@ except Exception as e:
 server_session = Session(app)
 
 # --- CONFIG: MONGODB & GRIDFS ---
-mongo_uri = os.environ.get("MONGO_URI")
+# Try getting the variable by the name we set, OR the default Vercel name
+mongo_uri = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI")
+
 db, users_col, history_col, fs = None, None, None, None
 
 if mongo_uri:
     try:
-        # tlsCAFile is crucial for Vercel/Cloud connectivity
+        # The tlsCAFile=certifi.where() is CRITICAL for Vercel
         client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
+        
+        # Force a connection check to see if it actually works
+        client.admin.command('ping')
+        
         db = client['celi_journal_db']
         users_col = db['users']
         history_col = db['history']
@@ -68,18 +74,14 @@ if mongo_uri:
         print("✅ Memory Core (MongoDB + GridFS + Vectors) Connected")
     except Exception as e:
         print(f"❌ Memory Core Error: {e}")
-
-# --- CONFIG: AI CORE (Gemini 2.5 Flash) ---
-api_key = os.environ.get("GEMINI_API_KEY")
-if api_key:
-    try: 
-        clean_key = api_key.strip().replace("'", "").replace('"', "")
-        genai.configure(api_key=clean_key)
-        print("✅ Gemini AI Core Connected")
-    except Exception as e:
-        print(f"❌ Gemini AI Connection Failed: {e}")
+        # Print the URI (masked) to logs to see if it's even finding it
+        if mongo_uri:
+            print(f"DEBUG: URI found but failed. Length: {len(mongo_uri)}")
+        else:
+            print("DEBUG: No URI found in environment variables.")
 else:
-    print("⚠️ GEMINI_API_KEY not set. AI functions will fail.")
+    print("❌ Critical: No MONGO_URI or MONGODB_URI found in environment variables.")
+
 
 # ==================================================
 #           MEMORY / ECHO PROTOCOL
