@@ -17,6 +17,33 @@ const ICON_ERROR = `<svg class="w-10 h-10 text-red-500 mx-auto mb-3" fill="none"
 const ICON_SPEAK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
 const ICON_CHEVRON = `<svg class="group-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
 
+// --- CORE UTILITIES (ADDED FOR STABILITY) ---
+function select(el) { return document.querySelector(el); }
+function selectAll(el) { return document.querySelectorAll(el); }
+
+function loading(show) {
+    const overlay = document.getElementById('loading-overlay');
+    // Also try finding the skeleton loader if overlay isn't present
+    const skeleton = document.getElementById('skeleton-loader');
+    
+    if (overlay) overlay.style.display = show ? 'flex' : 'none';
+    if (!show && skeleton) skeleton.style.display = 'none';
+}
+
+function updateText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.innerText = text;
+}
+
+function updateImage(id, src) {
+    const el = document.getElementById(id);
+    if (el && src) el.src = src;
+}
+
+function updateVar(name, value) {
+    document.documentElement.style.setProperty(name, value);
+}
+
 // --- AI SIGNAL SYSTEM (HUMANIZED) ---
 const AI_PROMPTS = [
     "How are you feeling right now?",
@@ -32,10 +59,12 @@ function triggerAiSignal() {
     const bubble = document.getElementById('ai-signal-bubble');
     const text = document.getElementById('ai-signal-text');
     
+    if (!bubble || !text) return; // Safety check
+
     // Pick random prompt
     const prompt = AI_PROMPTS[Math.floor(Math.random() * AI_PROMPTS.length)];
     text.innerText = prompt;
-    
+
     // Show Bubble (2s delay)
     setTimeout(() => {
         bubble.classList.add('visible');
@@ -48,23 +77,44 @@ function triggerAiSignal() {
 }
 
 // --- UTILS ---
-function openModal(id) { document.getElementById(id).style.display='flex'; }
-function closeModal(id) { document.getElementById(id).classList.remove('active'); document.getElementById(id).style.display='none'; }
-function showStatus(success, msg) { document.getElementById('status-icon').innerHTML = success ? ICON_SUCCESS : ICON_ERROR; document.getElementById('status-title').innerText = success ? "Success" : "Error"; document.getElementById('status-msg').innerText = msg; openModal('status-modal'); }
+function openModal(id) { 
+    const el = document.getElementById(id);
+    if(el) el.style.display='flex'; 
+}
+
+function closeModal(id) { 
+    const el = document.getElementById(id);
+    if(el) {
+        el.classList.remove('active'); 
+        el.style.display='none';
+    }
+}
+
+function showStatus(success, msg) { 
+    const icon = document.getElementById('status-icon');
+    const title = document.getElementById('status-title');
+    const message = document.getElementById('status-msg');
+    
+    if(icon) icon.innerHTML = success ? ICON_SUCCESS : ICON_ERROR; 
+    if(title) title.innerText = success ? "Success" : "Error"; 
+    if(message) message.innerText = msg; 
+    
+    openModal('status-modal'); 
+}
 
 function toggleTheme() {
     const html = document.documentElement;
     const btn = document.getElementById('theme-btn');
     if (html.getAttribute('data-theme') === 'light') {
         html.removeAttribute('data-theme');
-        btn.innerText = "Dark";
+        if(btn) btn.innerText = "Dark";
         localStorage.setItem('theme', 'dark');
     } else {
         html.setAttribute('data-theme', 'light');
-        btn.innerText = "Light";
+        if(btn) btn.innerText = "Light";
         localStorage.setItem('theme', 'light');
     }
-    if(typeof galaxyData !== 'undefined' && isGalaxyActive) {
+    if(typeof galaxyData !== 'undefined' && typeof isGalaxyActive !== 'undefined' && isGalaxyActive) {
         galaxyData.forEach(d => { if(d.color !== '#ef4444') d.color = (html.getAttribute('data-theme') === 'light' ? '#000' : '#fff'); });
     }
 }
