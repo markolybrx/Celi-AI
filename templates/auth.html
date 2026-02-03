@@ -9,10 +9,10 @@
     <style>
         :root { --mood: #00f2fe; }
         body { background: #000; color: #fff; font-family: 'Inter', sans-serif; overflow: hidden; height: 100vh; display: flex; align-items: center; justify-content: center; position: relative; }
-        
+
         /* STARFIELD CANVAS */
         #starfield { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
-        
+
         /* GLASS PANEL */
         .glass-panel { 
             position: relative; z-index: 10; width: 90%; max-width: 380px; 
@@ -36,7 +36,7 @@
         }
         .input-field:focus { border-color: var(--mood); box-shadow: 0 0 15px rgba(0, 242, 254, 0.1); background: rgba(0,0,0,0.6); }
         .input-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255, 255, 255, 0.4); margin-bottom: 8px; display: block; font-weight: 600; }
-        
+
         /* BUTTONS */
         .btn-primary { 
             width: 100%; padding: 16px; background: var(--mood); color: #000; 
@@ -58,7 +58,7 @@
         .inline-error { color: #ff4757; font-size: 10px; font-weight: 700; text-align: right; margin-top: 5px; display: none; text-transform: uppercase; }
         .icon-btn { position: absolute; right: 16px; top: 40px; cursor: pointer; opacity: 0.5; transition: opacity 0.2s; }
         .icon-btn:hover { opacity: 1; }
-        
+
         /* PFP */
         .pfp-container { display: flex; flex-direction: column; align-items: center; margin-bottom: 25px; }
         .pfp-circle { 
@@ -68,13 +68,13 @@
             overflow: hidden; transition: border-color 0.3s;
         }
         .pfp-preview { width: 100%; height: 100%; object-fit: cover; }
-        
+
         /* MODALS */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 50; display: none; align-items: center; justify-content: center; backdrop-filter: blur(10px); }
         .modal-box { background: #050505; border: 1px solid rgba(255,255,255,0.1); width: 90%; max-width: 400px; padding: 25px; border-radius: 20px; max-height: 80vh; overflow-y: auto; }
         .legal-box { font-size: 11px; color: #aaa; line-height: 1.6; }
         .legal-box h2 { color: #fff; font-size: 14px; margin: 15px 0 5px; }
-        
+
         /* LOADING */
         #loading-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 100; display: none; align-items: center; justify-content: center; flex-direction: column; }
         .nebula-spinner { width: 50px; height: 50px; border-radius: 50%; background: var(--mood); filter: blur(15px); animation: pulse 1s infinite alternate; }
@@ -89,7 +89,7 @@
         <div id="view-login">
             <h1 class="text-4xl font-black text-center mb-2 tracking-tighter text-white">Celi</h1>
             <p class="text-center text-[10px] uppercase tracking-[4px] text-white/40 mb-8">AI Journal System v3.0</p>
-            
+
             <form id="form-login" onsubmit="doLogin(event)">
                 <div class="input-group">
                     <label class="input-label">Identity</label>
@@ -117,24 +117,27 @@
                     <input type="hidden" name="profile_pic" id="hidden-pfp">
                     <span class="text-[9px] mt-2 opacity-50 uppercase tracking-wide">Tap to Upload Visage</span>
                 </div>
-                
+
                 <div class="flex gap-2">
                     <div class="input-group w-1/2"><label class="input-label">First Name</label><input type="text" name="fname" class="input-field" required></div>
                     <div class="input-group w-1/2"><label class="input-label">Last Name</label><input type="text" name="lname" class="input-field" required></div>
                 </div>
-                <div class="input-group"><label class="input-label">Frequency Name (User)</label><input type="text" name="reg_username" class="input-field" required></div>
+                
+                <div class="input-group"><label class="input-label">Frequency Name (User)</label><input type="text" name="username" class="input-field" required></div>
+                
                 <div class="input-group"><label class="input-label">Origin Date</label><input type="date" name="dob" class="input-field" required></div>
                 <div class="input-group"><label class="input-label">Aura Color</label><input type="text" name="fav_color" class="input-field" placeholder="#00f2fe" oninput="document.documentElement.style.setProperty('--mood', this.value)"></div>
-                
+
                 <div class="input-group"><label class="input-label">Security Protocol</label>
                     <select name="secret_question" class="input-field"><option value="pet">First Pet?</option><option value="city">Birth City?</option></select>
                 </div>
                 <div class="input-group"><input type="text" name="secret_answer" class="input-field" placeholder="Answer..." required></div>
+
+                <div class="input-group"><label class="input-label">Password</label><input type="password" id="reg-pass" name="password" class="input-field" required></div>
                 
-                <div class="input-group"><label class="input-label">Password</label><input type="password" id="reg-pass" name="reg_password" class="input-field" required></div>
                 <div class="input-group"><label class="input-label">Confirm</label><input type="password" id="conf-pass" class="input-field" required onkeyup="checkMatch()"></div>
                 <div id="reg-error" class="inline-error"></div>
-                
+
                 <button type="submit" class="btn-primary">Establish Link</button>
             </form>
             <button onclick="switchView('login')" class="btn-secondary">Return</button>
@@ -148,7 +151,7 @@
                 <div id="find-error" class="inline-error"></div>
                 <button type="submit" class="btn-primary">Scan Database</button>
             </form>
-            
+
             <form id="form-verify" style="display:none;" onsubmit="verifyAns(event)">
                 <div class="input-group"><label class="input-label">Security Question</label><input type="text" id="q-display" class="input-field" readonly></div>
                 <div class="input-group"><input type="text" id="ans-input" class="input-field" placeholder="Answer..." required></div>
@@ -170,7 +173,7 @@
         const canvas = document.getElementById('starfield');
         const ctx = canvas.getContext('2d');
         let stars = [];
-        
+
         function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
         window.addEventListener('resize', resize); resize();
 
@@ -219,8 +222,16 @@
         async function doLogin(e) {
             e.preventDefault(); loading(true);
             try {
+                // FIXED: Manually building JSON to ensure correct fields for login too
                 const fd = new FormData(document.getElementById('form-login'));
-                const res = await fetch('/login', {method:'POST', body:fd});
+                const data = Object.fromEntries(fd.entries());
+                
+                const res = await fetch('/login', {
+                    method:'POST', 
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                
                 const d = await res.json();
                 if(d.status === 'success') window.location.href = '/';
                 else { error('login-error-msg', d.error); loading(false); }
@@ -232,6 +243,8 @@
             if(document.getElementById('reg-pass').value !== document.getElementById('conf-pass').value) return error('reg-error', "Passwords mismatch");
             loading(true);
             const data = Object.fromEntries(new FormData(document.getElementById('form-register')).entries());
+            
+            // This now sends {username: "...", password: "...", ...} which matches app.py
             const res = await fetch('/api/register', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
             const d = await res.json();
             loading(false);
