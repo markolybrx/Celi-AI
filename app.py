@@ -7,6 +7,7 @@ import redis
 import ssl
 import json
 import gridfs
+import random
 from bson.objectid import ObjectId
 from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for, session, Response
 from flask_session import Session
@@ -16,11 +17,11 @@ import google.generativeai as genai
 from pymongo import MongoClient
 
 # --- IMPORT RANK LOGIC ---
-# Ensure rank_system.py is in the same directory!
 try:
-    from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data
+    from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data, RANK_SYSTEM
 except ImportError:
-    # Fallback if file is missing during initial setup to prevent crash
+    # Fallback to prevent crash if file missing during setup
+    RANK_SYSTEM = []
     def process_daily_rewards(uid, db): return {}
     def update_rank_check(uid, col, hist): return None, None
     def get_rank_meta(pts): return "Novice", "Star", 1
@@ -35,397 +36,352 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'celi_super_secret_key_9
 app.config['SESSION_TYPE'] = 'redis'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
-app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 1 day
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600 * 24 * 7 # 7 Days
 
+# Redis Connection (Handle both Local and Production URL)
 redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379')
-try:
-    # Vercel/Upstash Redis usually requires SSL modification
-    if 'upstash' in redis_url or 'rediss' in redis_url:
-        if redis_url.startswith('redis://'):
-            redis_url = redis_url.replace('redis://', 'rediss://', 1)
-        app.config['SESSION_REDIS'] = redis.from_url(redis_url, ssl_cert_reqs=None)
-    else:
-        app.config['SESSION_REDIS'] = redis.from_url(redis_url)
-    print("✅ Redis Session Store Connected")
-except Exception as e:
-    print(f"⚠️ Redis connection error: {e}. Falling back to filesystem sessions (Note: ephemeral on Vercel).")
-    app.config['SESSION_TYPE'] = 'filesystem'
-
-server_session = Session(app)
-
-# --- CONFIG: MONGODB & GRIDFS ---
-# Try getting the variable by the name we set, OR the default Vercel name
-mongo_uri = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI")
-
-db, users_col, history_col, fs = None, None, None, None
-
-if mongo_uri:
-    try:
-        # The tlsCAFile=certifi.where() is CRITICAL for Vercel
-        client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
-        
-        # Force a connection check to see if it actually works
-        client.admin.command('ping')
-        
-        db = client['celi_journal_db']
-        users_col = db['users']
-        history_col = db['history']
-        fs = gridfs.GridFS(db)
-        print("✅ Memory Core (MongoDB + GridFS + Vectors) Connected")
-    except Exception as e:
-        print(f"❌ Memory Core Error: {e}")
-        # Print the URI (masked) to logs to see if it's even finding it
-        if mongo_uri:
-            print(f"DEBUG: URI found but failed. Length: {len(mongo_uri)}")
-        else:
-            print("DEBUG: No URI found in environment variables.")
+if redis_url.startswith('rediss://'):
+    # Production (Render/Vercel) often needs SSL certs ignored for Redis
+    app.config['SESSION_REDIS'] = redis.from_url(redis_url, ssl_cert_reqs=None)
 else:
-    print("❌ Critical: No MONGO_URI or MONGODB_URI found in environment variables.")
+    app.config['SESSION_REDIS'] = redis.from_url(redis_url)
 
+Session(app)
 
-# ==================================================
-#           MEMORY / ECHO PROTOCOL
-# ==================================================
+# --- CONFIG: MONGODB ---
+MONGO_URI = os.environ.get('MONGO_URI')
+if not MONGO_URI:
+    logging.warning("MONGO_URI not found. App will crash on DB access.")
 
-def get_embedding(text):
-    try:
-        if not text or len(text) < 5: return None
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=text,
-            task_type="retrieval_document",
-            title="Journal Entry"
-        )
-        return result['embedding']
-    except Exception as e:
-        print(f"Embedding Error: {e}")
-        return None
+try:
+    client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+    db = client['celi_db']
+    users_col = db['users']
+    history_col = db['history']
+    fs = gridfs.GridFS(db)
+    logging.info("Connected to MongoDB Atlas.")
+except Exception as e:
+    logging.error(f"MongoDB Connection Failed: {e}")
 
-def find_similar_memories(user_id, query_text):
-    if not query_text or history_col is None: return []
-    query_vector = get_embedding(query_text)
-    if not query_vector: return []
-
-    pipeline = [
-        {
-            "$vectorSearch": {
-                "index": "vector_index",
-                "path": "embedding",
-                "queryVector": query_vector,
-                "numCandidates": 50,
-                "limit": 3,
-                "filter": {"user_id": user_id}
-            }
-        },
-        {
-            "$project": {
-                "_id": 0,
-                "full_message": 1,
-                "date": 1,
-                "score": {"$meta": "vectorSearchScore"}
-            }
-        }
-    ]
-    try:
-        results = list(history_col.aggregate(pipeline))
-        # Filter for relevance
-        return [r for r in results if r['score'] > 0.65] 
-    except Exception as e:
-        print(f"Vector Search Error: {e}")
-        return []
+# --- CONFIG: GEMINI AI ---
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    # Use the Flash model for speed
+    model = genai.GenerativeModel('gemini-2.0-flash')
+else:
+    logging.warning("GEMINI_API_KEY not set.")
 
 # ==================================================
-#                 AI HELPER FUNCTIONS
-# ==================================================
-
-def generate_analysis(entry_text):
-    candidates = ["gemini-2.5-flash", "gemini-2.0-flash"]
-    for m in candidates:
-        try:
-            model = genai.GenerativeModel(m)
-            prompt = f"Provide a warm, human-like psychological insight about this journal entry. Speak directly to 'You'. Keep it 1-2 sentences. Entry: {entry_text}"
-            response = model.generate_content(prompt)
-            return response.text.strip()
-        except Exception:
-            continue
-    return "Analysis unavailable due to signal interference."
-
-def generate_summary(entry_text):
-    candidates = ["gemini-2.5-flash", "gemini-2.0-flash"]
-    for m in candidates:
-        try:
-            model = genai.GenerativeModel(m)
-            prompt = f"Write a 1-2 sentence recap of this entry addressed to 'You', as a supportive friend. Do not start with 'You mentioned'. Entry: {entry_text}"
-            response = model.generate_content(prompt)
-            return response.text.strip().replace('"', '').replace("'", "")
-        except:
-            continue
-    return entry_text[:50] + "..."
-
-def generate_constellation_name(entries_text):
-    try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        prompt = f"Here are 7 days of journal entries. Give them a mystical 'Constellation Name'. Just the name. Entries: {entries_text}"
-        response = model.generate_content(prompt)
-        return response.text.strip().replace('"', '').replace("'", "")
-    except:
-        return "Unknown Constellation"
-
-def generate_with_media(msg, media_bytes=None, media_mime=None, is_void=False, context_memories=[]):
-    candidates = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
-    
-    memory_block = ""
-    if context_memories:
-        memory_block = "\n\n[RECALLED MEMORIES]:\n"
-        for mem in context_memories:
-            memory_block += f"- ({mem['date']}): {mem['full_message']}\n"
-
-    base_instruction = (
-        "You are 'The Void'. Infinite, safe emptiness. Absorb pain. " 
-        if is_void else 
-        "You are Celi: AI Journal. Friendly, empathetic, smart-casual, and witty. "
-        "Support the user. Remember everything about them from the provided memories."
-    )
-    
-    system_instruction = base_instruction + memory_block
-
-    content = [msg]
-    has_media = False
-    if media_bytes and media_mime and 'image' in media_mime:
-        has_media = True
-        content.append({'mime_type': media_mime, 'data': media_bytes})
-
-    # Try Primary Models
-    for m in candidates:
-        try:
-            model = genai.GenerativeModel(m, system_instruction=system_instruction)
-            response = model.generate_content(content)
-            if response.text:
-                return response.text.strip()
-        except Exception as e:
-            print(f"DEBUG: Model Error ({m}): {e}")
-            continue
-
-    # Fallback for Media
-    if has_media:
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
-            response = model.generate_content(msg + " [Image attached but signal weak]")
-            return response.text.strip()
-        except Exception as e:
-            print(f"Fallback Error: {e}")
-
-    return "Signal Lost. Visual/Text processing failed. Check your API key or connection."
-
-# ==================================================
-#                     ROUTES
+#                 CORE ROUTES
 # ==================================================
 
 @app.route('/')
 def index():
-    if 'user_id' not in session: 
-        return redirect(url_for('login_page'))
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
     return render_template('index.html')
 
-@app.route('/login', methods=['GET', 'POST'])
-def login_page():
-    if request.method == 'GET': 
-        return redirect(url_for('index')) if 'user_id' in session else render_template('auth.html')
-    
-    try:
-        data = request.json if request.is_json else request.form
-        username = data.get('username')
-        password = data.get('password')
-
-        if users_col is None: return jsonify({"status": "error", "error": "Database Offline"}), 500
-        
-        user = users_col.find_one({"username": username})
-        if user and check_password_hash(user['password_hash'], password):
-            session['user_id'] = user['user_id']
-            # Run daily check on login
-            rewards = process_daily_rewards(user['user_id'], users_col)
-            return jsonify({"status": "success", "rewards": rewards})
-        
-        return jsonify({"status": "error", "error": "Invalid Credentials"}), 401
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-@app.route('/api/register', methods=['POST'])
-def register():
-    try:
-        data = request.json if request.is_json else request.form
-        username = data.get('username')
-        password = data.get('password')
-        
-        if not username or not password:
-            return jsonify({"status": "error", "error": "Missing fields"}), 400
-            
-        if users_col.find_one({"username": username}):
-            return jsonify({"status": "error", "error": "Username taken"}), 409
-            
-        user_id = str(uuid.uuid4())
-        hashed_pw = generate_password_hash(password)
-        
-        new_user = {
-            "user_id": user_id,
-            "username": username,
-            "password_hash": hashed_pw,
-            "created_at": datetime.now(timezone.utc),
-            "xp": 0,
-            "level": 1,
-            "rank": "Novice Stargazer",
-            "bio": "A new traveler in the cosmos.",
-            "profile_pic_id": None,
-            "last_login": datetime.now(timezone.utc).isoformat()
-        }
-        users_col.insert_one(new_user)
-        session['user_id'] = user_id
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-@app.route('/logout')
-def logout(): 
-    session.clear()
-    return redirect(url_for('login_page'))
+@app.route('/login')
+def login():
+    if 'user_id' in session:
+        return redirect(url_for('index'))
+    return render_template('auth.html')
 
 @app.route('/privacy_policy')
 def privacy_policy():
     return render_template('privacy_policy.html')
 
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+# ==================================================
+#                 API: AUTH
+# ==================================================
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    # Secret Question for recovery
+    sq_id = data.get('secret_q_id')
+    sq_ans = data.get('secret_ans')
+
+    if users_col.find_one({"username": username}):
+        return jsonify({"status": "error", "message": "Username taken"}), 400
+
+    hashed = generate_password_hash(password)
+    
+    uid = str(uuid.uuid4())
+    new_user = {
+        "user_id": uid,
+        "username": username,
+        "password": hashed,
+        "secret_q_id": sq_id,
+        "secret_ans": sq_ans.lower().strip() if sq_ans else "",
+        "created_at": datetime.now(timezone.utc),
+        "stardust": 0,
+        "rank_index": 0,
+        "rank": "Observer",
+        "xp": 0
+    }
+    users_col.insert_one(new_user)
+    session['user_id'] = uid
+    return jsonify({"status": "success", "redirect": "/"})
+
+@app.route('/api/login_check', methods=['POST'])
+def login_check():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    
+    user = users_col.find_one({"username": username})
+    if user and check_password_hash(user['password'], password):
+        session['user_id'] = user['user_id']
+        
+        # --- SYNCHRONOUS DAILY REWARD CHECK ---
+        # We do this here instead of Celery to simplify deployment
+        process_daily_rewards(user['user_id'], db)
+        
+        return jsonify({"status": "success", "redirect": "/"})
+    
+    return jsonify({"status": "error", "message": "Invalid credentials"}), 401
+
+@app.route('/api/get_security_q', methods=['POST'])
+def get_security_q():
+    """Fetch user's security question ID for recovery"""
+    data = request.json
+    username = data.get('username')
+    user = users_col.find_one({"username": username})
+    if not user:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+    return jsonify({"status": "success", "q_id": user.get('secret_q_id', 'mother_maiden')})
+
+@app.route('/api/recover', methods=['POST'])
+def recover_account():
+    data = request.json
+    username = data.get('username')
+    ans = data.get('secret_answer', '').lower().strip()
+    
+    user = users_col.find_one({"username": username})
+    if user and user.get('secret_ans') == ans:
+        return jsonify({"status": "success", "username": username})
+    return jsonify({"status": "error"}), 401
+
+@app.route('/api/reset_password', methods=['POST'])
+def reset_password():
+    data = request.json
+    username = data.get('username')
+    new_pw = data.get('new_password')
+    
+    hashed = generate_password_hash(new_pw)
+    users_col.update_one({"username": username}, {"$set": {"password": hashed}})
+    return jsonify({"status": "success"})
+
+# ==================================================
+#                 API: DATA & RANK
+# ==================================================
+
+@app.route('/api/get_user_data')
+def get_user_data():
+    if 'user_id' not in session: return jsonify({}), 401
+    user = users_col.find_one({"user_id": session['user_id']}, {"_id": 0, "password": 0, "secret_ans": 0})
+    
+    # Enrich with Rank Meta
+    rank_title = user.get('rank', 'Observer')
+    # Identify index based on title
+    r_idx = 0
+    for i, r in enumerate(RANK_SYSTEM):
+        if r['title'] == rank_title:
+            r_idx = i
+            break
+            
+    # Get Next Level Meta
+    current_req = RANK_SYSTEM[r_idx]['req']
+    next_req = RANK_SYSTEM[r_idx+1]['req'] if r_idx + 1 < len(RANK_SYSTEM) else current_req
+    
+    psyche_type = RANK_SYSTEM[r_idx]['psyche']
+    
+    user['rank_index'] = r_idx
+    user['star_type'] = psyche_type
+    user['next_level_xp'] = next_req
+    
+    # Get PFP URL
+    if 'profile_pic_id' in user:
+        user['pfp_url'] = f"/api/media/{user['profile_pic_id']}"
+    
+    return jsonify(user)
+
+@app.route('/api/ranks_tree')
+def get_ranks_tree():
+    """Returns the static rank definition for the modal tree"""
+    return jsonify(get_all_ranks_data())
+
+# ==================================================
+#                 API: CHAT & AI
+# ==================================================
+
+@app.route('/api/process', methods=['POST'])
+def process_chat():
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    
+    uid = session['user_id']
+    data = request.json
+    user_msg = data.get('message', '')
+    mode = data.get('mode', 'journal') # 'journal' (Celi) or 'rant' (Void)
+    
+    # 1. Store User Message
+    entry_id = history_col.insert_one({
+        "user_id": uid,
+        "role": "user",
+        "content": user_msg,
+        "mode": mode,
+        "date": datetime.now(timezone.utc),
+        "type": "text"
+    }).inserted_id
+    
+    # 2. Generate AI Response
+    system_instruction = ""
+    if mode == 'rant':
+        # VOID MODE: Minimalist, absorbing, validates pain
+        system_instruction = "You are The Void. You are a listener. Absorb the user's negativity. Be brief, stoic, but acknowledging. Do not offer solutions. Just hear them. Use lower case mostly."
+    else:
+        # CELI MODE: Analytical, Mirror Protocol, High-Level
+        system_instruction = "You are Celi, a sovereign AI mirror. Your goal is to reflect the user's psyche back to them. Be insightful, slightly cryptic but warm. Analyze their patterns. Use brief, punchy sentences. Do not sound like a generic assistant."
+
+    try:
+        chat = model.start_chat(history=[
+            {"role": "user", "parts": [system_instruction]}
+        ])
+        response = chat.send_message(user_msg)
+        ai_text = response.text
+    except Exception as e:
+        ai_text = "I am having trouble connecting to the stars right now..."
+        logging.error(f"Gemini Error: {e}")
+
+    # 3. Store AI Response
+    history_col.insert_one({
+        "user_id": uid,
+        "role": "model",
+        "content": ai_text,
+        "mode": mode,
+        "date": datetime.now(timezone.utc),
+        "type": "text"
+    })
+    
+    # 4. Update Rank / XP (Synchronous)
+    # We grant simple XP for chatting (e.g., 10 Stardust)
+    # In a full version, this would be more complex logic in rank_system
+    users_col.update_one({"user_id": uid}, {"$inc": {"stardust": 10, "xp": 10}})
+    
+    # Check for Rank Up
+    new_rank, msg = update_rank_check(uid, users_col, history_col)
+    
+    return jsonify({
+        "response": ai_text, 
+        "rank_up": new_rank,
+        "rank_msg": msg
+    })
+
+# ==================================================
+#                 API: GALAXY & HISTORY
+# ==================================================
+
+@app.route('/api/get_history')
+def get_history():
+    if 'user_id' not in session: return jsonify([])
+    # Get last 30 entries for the list view
+    entries = list(history_col.find({"user_id": session['user_id'], "role": "user"}).sort("date", -1).limit(30))
+    for e in entries:
+        e['_id'] = str(e['_id'])
+        e['date'] = e['date'].isoformat()
+    return jsonify(entries)
+
+@app.route('/api/galaxy_map')
+def get_galaxy_map():
+    """
+    Returns ALL user entries formatted for the Canvas Starfield.
+    In V1, we generate random coordinates here or let Frontend handle it.
+    Let's send the raw list and let galaxy.js animate them.
+    """
+    if 'user_id' not in session: return jsonify([])
+    
+    # Fetch only necessary fields to keep payload light
+    cursor = history_col.find(
+        {"user_id": session['user_id'], "role": "user"},
+        {"content": 1, "mode": 1, "date": 1}
+    ).sort("date", -1)
+    
+    stars = []
+    for doc in cursor:
+        # Determine color based on mode
+        color = "#00f2fe" # Default Celi Blue
+        if doc.get('mode') == 'rant':
+            color = "#ef4444" # Void Red
+            
+        stars.append({
+            "id": str(doc['_id']),
+            "date": doc['date'].isoformat(),
+            "preview": doc['content'][:50] + "...",
+            "type": doc.get('mode', 'journal'),
+            "color": color
+        })
+        
+    return jsonify(stars)
+
+@app.route('/api/star_detail')
+def get_star_detail():
+    """Returns full details for a specific entry ID (clicked star/calendar day)"""
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    
+    entry_id = request.args.get('id')
+    if not entry_id: return jsonify({"error": "No ID"}), 400
+    
+    try:
+        entry = history_col.find_one({"_id": ObjectId(entry_id), "user_id": session['user_id']})
+        if not entry: return jsonify({"error": "Not Found"}), 404
+        
+        # Fetch the AI response that followed this user entry
+        # Assuming typical chat flow: User Entry -> Model Entry (sorted by date)
+        ai_reply = history_col.find_one({
+            "user_id": session['user_id'],
+            "role": "model",
+            "date": {"$gt": entry['date']}
+        }, sort=[("date", 1)])
+        
+        analysis_text = ai_reply['content'] if ai_reply else "No analysis found for this memory."
+        
+        return jsonify({
+            "date": entry['date'].strftime("%B %d, %Y"),
+            "content": entry['content'],
+            "analysis": analysis_text,
+            "image_id": entry.get('image_id'), # If we had media
+            "audio_id": entry.get('audio_id')
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ==================================================
+#                 API: MEDIA (GridFS)
+# ==================================================
+
 @app.route('/api/media/<file_id>')
 def get_media(file_id):
     try:
-        if fs is None: return "Database Error", 500
         grid_out = fs.get(ObjectId(file_id))
         return Response(grid_out.read(), mimetype=grid_out.content_type)
     except:
         return "File not found", 404
 
-# --- MAIN CHAT PROCESSOR ---
-@app.route('/api/process', methods=['POST'])
-def process_message():
-    if 'user_id' not in session:
-        return jsonify({"status": "error", "error": "Unauthorized"}), 401
-
-    try:
-        user_id = session['user_id']
-        message = request.form.get('message', '')
-        mode = request.form.get('mode', 'normal') # 'normal' or 'void'
-        
-        # Handle Image Upload
-        image_file = request.files.get('image')
-        media_bytes = None
-        media_mime = None
-        file_id_str = None
-
-        if image_file:
-            media_bytes = image_file.read()
-            media_mime = image_file.content_type
-            # Store image in GridFS
-            file_id = fs.put(media_bytes, filename=image_file.filename, content_type=media_mime)
-            file_id_str = str(file_id)
-
-        # 1. Retrieve Context
-        context_memories = find_similar_memories(user_id, message)
-        
-        # 2. Generate AI Response
-        is_void = (mode == 'void')
-        ai_response_text = generate_with_media(message, media_bytes, media_mime, is_void, context_memories)
-
-        # 3. Analyze & Embed
-        analysis = generate_analysis(message)
-        summary = generate_summary(message)
-        embedding = get_embedding(message + " " + ai_response_text)
-
-        # 4. Save to History
-        entry = {
-            "user_id": user_id,
-            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "full_message": message,
-            "ai_response": ai_response_text,
-            "image_id": file_id_str,
-            "analysis": analysis,
-            "summary": summary,
-            "embedding": embedding,
-            "mode": mode
-        }
-        history_col.insert_one(entry)
-
-        # 5. Check Rank Update (XP System)
-        # Assuming 10 XP per entry
-        users_col.update_one({"user_id": user_id}, {"$inc": {"xp": 10}})
-        new_rank, rank_msg = update_rank_check(user_id, users_col, history_col)
-
-        return jsonify({
-            "status": "success",
-            "response": ai_response_text,
-            "analysis": analysis,
-            "rank_update": rank_msg if new_rank else None
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-@app.route('/api/get_user_data')
-def get_user_data():
-    if 'user_id' not in session: return jsonify({"error": "No User"}), 401
-    
-    user = users_col.find_one({"user_id": session['user_id']}, {"_id": 0, "password_hash": 0})
-    if not user: return jsonify({"error": "User missing"}), 404
-    
-    # --- FIX START: Align with new Rank System ---
-    # The new system uses 'rank_index' to determine current rank
-    current_index = user.get('rank_index', 0)
-    
-    # Get metadata from rank_system.py
-    # We pass the INDEX, not the XP/Stardust
-    rank_name, star_type, next_threshold = get_rank_meta(current_index)
-    
-    # Send standardized data to frontend
-    user['rank'] = rank_name
-    user['star_type'] = star_type
-    user['next_level_xp'] = next_threshold
-    # Ensure stardust is sent (frontend expects it)
-    user['stardust'] = user.get('stardust', 0)
-    # --- FIX END ---
-
-    return jsonify(user)
-
-
-@app.route('/api/get_history')
-def get_history():
-    if 'user_id' not in session: return jsonify([])
-    # Get last 20 entries
-    entries = list(history_col.find({"user_id": session['user_id']}).sort("date", -1).limit(20))
-    for e in entries:
-        e['_id'] = str(e['_id']) # Convert ObjectId to string
-    return jsonify(entries[::-1]) # Reverse to show chronological
-
-@app.route('/api/update_profile', methods=['POST'])
-def update_profile():
-    if 'user_id' not in session: return jsonify({"status": "error"}), 401
-    
-    username = request.form.get('username')
-    bio = request.form.get('bio')
-    pfp_file = request.files.get('pfp')
-    
-    update_data = {}
-    if username: update_data['username'] = username
-    if bio: update_data['bio'] = bio
-    
-    if pfp_file:
-        file_id = fs.put(pfp_file.read(), filename=pfp_file.filename, content_type=pfp_file.content_type)
-        update_data['profile_pic_id'] = str(file_id)
-        
-    users_col.update_one({"user_id": session['user_id']}, {"$set": update_data})
-    return jsonify({"status": "success"})
-
 # ==================================================
-#                  APP RUN
+#                 MAIN EXECUTION
 # ==================================================
-# CRITICAL FOR VERCEL: Only run app.run() if executed directly.
+
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    # Determine Port for Render/Heroku
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
