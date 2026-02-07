@@ -16,6 +16,10 @@ from datetime import datetime, timezone
 import google.generativeai as genai
 from pymongo import MongoClient
 
+# --- ENV LOADER (NEW) ---
+from dotenv import load_dotenv
+load_dotenv() # <--- This loads your .env file locally
+
 # --- IMPORT RANK LOGIC ---
 try:
     from rank_system import process_daily_rewards, update_rank_check, get_rank_meta, get_all_ranks_data, RANK_SYSTEM
@@ -143,7 +147,6 @@ def login_check():
         session['user_id'] = user['user_id']
         
         # --- SYNCHRONOUS DAILY REWARD CHECK ---
-        # We do this here instead of Celery to simplify deployment
         process_daily_rewards(user['user_id'], db)
         
         return jsonify({"status": "success", "redirect": "/"})
@@ -273,11 +276,7 @@ def process_chat():
     })
     
     # 4. Update Rank / XP (Synchronous)
-    # We grant simple XP for chatting (e.g., 10 Stardust)
-    # In a full version, this would be more complex logic in rank_system
     users_col.update_one({"user_id": uid}, {"$inc": {"stardust": 10, "xp": 10}})
-    
-    # Check for Rank Up
     new_rank, msg = update_rank_check(uid, users_col, history_col)
     
     return jsonify({
@@ -302,14 +301,8 @@ def get_history():
 
 @app.route('/api/galaxy_map')
 def get_galaxy_map():
-    """
-    Returns ALL user entries formatted for the Canvas Starfield.
-    In V1, we generate random coordinates here or let Frontend handle it.
-    Let's send the raw list and let galaxy.js animate them.
-    """
     if 'user_id' not in session: return jsonify([])
     
-    # Fetch only necessary fields to keep payload light
     cursor = history_col.find(
         {"user_id": session['user_id'], "role": "user"},
         {"content": 1, "mode": 1, "date": 1}
@@ -317,7 +310,6 @@ def get_galaxy_map():
     
     stars = []
     for doc in cursor:
-        # Determine color based on mode
         color = "#00f2fe" # Default Celi Blue
         if doc.get('mode') == 'rant':
             color = "#ef4444" # Void Red
@@ -334,7 +326,6 @@ def get_galaxy_map():
 
 @app.route('/api/star_detail')
 def get_star_detail():
-    """Returns full details for a specific entry ID (clicked star/calendar day)"""
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
     
     entry_id = request.args.get('id')
@@ -344,8 +335,6 @@ def get_star_detail():
         entry = history_col.find_one({"_id": ObjectId(entry_id), "user_id": session['user_id']})
         if not entry: return jsonify({"error": "Not Found"}), 404
         
-        # Fetch the AI response that followed this user entry
-        # Assuming typical chat flow: User Entry -> Model Entry (sorted by date)
         ai_reply = history_col.find_one({
             "user_id": session['user_id'],
             "role": "model",
@@ -358,7 +347,7 @@ def get_star_detail():
             "date": entry['date'].strftime("%B %d, %Y"),
             "content": entry['content'],
             "analysis": analysis_text,
-            "image_id": entry.get('image_id'), # If we had media
+            "image_id": entry.get('image_id'),
             "audio_id": entry.get('audio_id')
         })
         
@@ -382,6 +371,5 @@ def get_media(file_id):
 # ==================================================
 
 if __name__ == '__main__':
-    # Determine Port for Render/Heroku
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
