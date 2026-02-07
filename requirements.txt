@@ -7,3 +7,4 @@ certifi
 redis
 flask-session
 werkzeug
+python-dotenv
